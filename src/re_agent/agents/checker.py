@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from re_agent.backend.protocol import REBackend
 from re_agent.core.models import CheckerVerdict, FunctionTarget, SymbolProposal, Verdict
@@ -17,6 +18,79 @@ SUMMARY_RE = re.compile(r"SUMMARY:\s*(.+)")
 ISSUES_RE = re.compile(r"ISSUES:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
 FIX_RE = re.compile(r"FIX_INSTRUCTIONS:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
 SYMBOL_ISSUES_RE = re.compile(r"SYMBOL_ISSUES:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
+FENCE_RE = re.compile(r"```[ \t]*(?:json)?[ \t]*\r?\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _loads_dict(text: str) -> dict[str, Any] | None:
+    """Parse ``text`` as a JSON object, or return ``None``."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _strip_fence(text: str) -> str:
+    """Unwrap ``text`` when it is a single fenced code block and nothing else."""
+    if text.startswith("```") and text.endswith("```"):
+        body = text[3:-3]
+        newline = body.find("\n")
+        if newline != -1:
+            body = body[newline + 1 :]
+        return body.strip()
+    return text
+
+
+def _balanced_objects(text: str) -> list[str]:
+    """Return the top-level ``{...}`` regions of ``text``, ignoring braces in strings."""
+    objects: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                objects.append(text[start : index + 1])
+    return objects
+
+
+def _extract_json_object(response: str) -> dict[str, Any] | None:
+    """Find the verdict JSON, tolerating prose, fences, and stray braces.
+
+    Models commonly narrate their reasoning before emitting the result. Only the
+    exact whole-response object keeps its old lenient behaviour; every embedded
+    candidate must carry a ``verdict`` key, so an unrelated example object in the
+    prose cannot be mistaken for the decision. Candidates are searched from the
+    end so the final answer wins.
+    """
+    text = response.strip()
+    direct = _loads_dict(_strip_fence(text))
+    if direct is not None:
+        return direct
+
+    candidates = [match.group(1).strip() for match in FENCE_RE.finditer(text)]
+    candidates.extend(_balanced_objects(text))
+    for candidate in reversed(candidates):
+        payload = _loads_dict(candidate)
+        if payload is not None and "verdict" in payload:
+            return payload
+    return None
 
 
 def _render_symbol(symbol: SymbolProposal | None) -> str:
@@ -151,16 +225,8 @@ class CheckerAgent:
 
     @staticmethod
     def _parse_json_verdict(response: str) -> CheckerVerdict | None:
-        text = response.strip()
-        if text.startswith("```json") and text.endswith("```"):
-            text = text[7:-3].strip()
-        if not text.startswith("{"):
-            return None
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
+        payload = _extract_json_object(response)
+        if payload is None:
             return None
         raw_verdict = str(payload.get("verdict", "UNKNOWN")).upper()
         verdict = {
