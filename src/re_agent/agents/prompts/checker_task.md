@@ -1,4 +1,4 @@
-Verify the following reversed function against the Ghidra decompilation.
+Verify the following reversed function against the decompiler output.
 
 **Function:** ${class_name}::${function_name} at ${address}
 
@@ -7,7 +7,7 @@ Verify the following reversed function against the Ghidra decompilation.
 ${reversed_code}
 ```
 
-**Ghidra decompilation (derived evidence; may contain analysis errors):**
+**Decompiler output (derived evidence; may contain analysis errors):**
 ```
 ${decompiled}
 ```

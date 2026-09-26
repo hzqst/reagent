@@ -2,7 +2,7 @@ Reverse the following function into clean ${language_standard}.
 
 **Target:** ${class_name}::${function_name} at ${address}
 
-**Ghidra Decompile:**
+**Decompiler Output:**
 ```
 ${decompiled}
 ```
