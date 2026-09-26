@@ -107,6 +107,29 @@ def post_jsonrpc(
     return payload.get("result") or {}, returned_session
 
 
+def recover_truncated(tool: str, result: dict[str, Any], timeout_s: int) -> Any:
+    """Return a tool call's full structured content, recovering oversized output.
+
+    The server replaces output above its limit with a short preview and reports
+    the real payload's download URL under ``_meta``.  Operating on the preview
+    would silently give the caller a partial view of the database, so a
+    recovery failure is fatal rather than degraded.
+
+    Shared with the write-side client: a bulk ``lookup_funcs`` over a few
+    hundred addresses exceeds the limit, and losing that truncation signal
+    makes the caller treat unresolved functions as unnamed.
+    """
+    meta = (result.get("_meta") or {}).get(_TRUNCATION_META_KEY) or {}
+    if not meta.get("output_truncated"):
+        structured = result.get("structuredContent")
+        return _content_text(result) if structured is None else structured
+
+    download_url = meta.get("download_url")
+    if not download_url:
+        raise RuntimeError(f"IDA MCP tool {tool!r} truncated its output without a download URL")
+    return _get_json(str(download_url), timeout_s)
+
+
 def _get_json(url: str, timeout_s: int) -> Any:
     """GET a JSON document (used to recover truncated tool output)."""
     request = urllib.request.Request(url, method="GET")
@@ -184,26 +207,9 @@ class IdaMcpBackend:
         if result.get("isError"):
             raise RuntimeError(f"IDA MCP tool {tool!r} failed: {_content_text(result)}")
 
-        structured = self._recover_truncated(tool, result)
+        structured = recover_truncated(tool, result, self._timeout_s)
         self._response_cache[cache_key] = structured
         return structured
-
-    def _recover_truncated(self, tool: str, result: dict[str, Any]) -> Any:
-        """Return the full structured content, recovering it if truncated.
-
-        The server replaces oversized output with a preview and reports the
-        real payload's download URL under ``_meta``.  Using the preview would
-        silently corrupt evidence, so a recovery failure is fatal.
-        """
-        meta = (result.get("_meta") or {}).get(_TRUNCATION_META_KEY) or {}
-        if not meta.get("output_truncated"):
-            structured = result.get("structuredContent")
-            return _content_text(result) if structured is None else structured
-
-        download_url = meta.get("download_url")
-        if not download_url:
-            raise RuntimeError(f"IDA MCP tool {tool!r} truncated its output without a download URL")
-        return _get_json(str(download_url), self._timeout_s)
 
     @staticmethod
     def _first_item(structured: Any) -> dict[str, Any] | None:

@@ -74,6 +74,44 @@ def test_function_names_are_indexed_by_address_and_by_name(monkeypatch):
     assert names[address_key("sub_455DD0")] == "sub_455DD0"
 
 
+def test_interior_address_resolves_to_the_containing_function(monkeypatch):
+    """An address inside a function resolves to that function.
+
+    Regression: the result was only indexed by the address IDA resolved to, so
+    an interior address matched nothing and ``--only-unnamed`` treated the
+    already-named containing function as unnamed.  Renaming through an interior
+    address renames the whole function.
+    """
+    _client(
+        monkeypatch,
+        lambda tool, args: {
+            "result": [
+                {
+                    "query": "0x559E7B",
+                    "fn": {"addr": "0x559e40", "name": "LoadOptionsClass::SaveMission_559E40"},
+                }
+            ]
+        },
+    )
+
+    names = IdaWriteClient("http://x/mcp").function_names(["0x559E7B"])
+
+    assert names[address_key("0x559E7B")] == "LoadOptionsClass::SaveMission_559E40"
+
+
+def test_interior_address_is_skipped_as_already_named():
+    entries = [_Entry(address="0x559E7B", proposal=SymbolProposal(name="LoadOptionsClass::SaveMission"))]
+
+    _decide(
+        entries,
+        {address_key("0x559E7B"): "LoadOptionsClass::SaveMission_559E40"},
+        only_unnamed=True,
+        include_flagged=False,
+    )
+
+    assert entries[0].action == "skip-named"
+
+
 def test_rename_returns_per_item_results(monkeypatch):
     """The tool answers with {"func": [...], "summary": {...}}, not a list."""
     _client(
@@ -91,6 +129,57 @@ def test_protocol_error_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="connection refused"):
         IdaWriteClient("http://x/mcp").rename_functions([("0x1", "A::b")], dry_run=True)
+
+
+def _truncating_client(monkeypatch, structured, meta):
+    """Patch the transport so every tool call answers with a truncated preview."""
+
+    def post(url, method, params, timeout_s, session_id=None):
+        if method == "initialize":
+            return {}, "sess"
+        return (
+            {
+                "structuredContent": structured,
+                "content": [],
+                "isError": False,
+                "_meta": {"ida_mcp": meta},
+            },
+            "sess",
+        )
+
+    monkeypatch.setattr("re_agent.backend.ida_write.post_jsonrpc", post)
+
+
+def test_truncated_output_is_downloaded(monkeypatch):
+    """A bulk lookup past the server's output limit must not be read as a preview.
+
+    Regression: ignoring ``_meta`` made ``function_names`` see only the first few
+    hundred addresses, so ``--only-unnamed`` treated already-named functions as
+    unnamed and reported them as renames to apply.
+    """
+    _truncating_client(
+        monkeypatch,
+        {"result": [{"query": "0x1", "fn": {"addr": "0x1", "name": "preview"}}]},
+        {"output_truncated": True, "download_url": "http://x/full.json"},
+    )
+    fetched = []
+    monkeypatch.setattr(
+        "re_agent.backend.ida_mcp._get_json",
+        lambda url, timeout_s: fetched.append(url)
+        or {"result": [{"query": "0x1", "fn": {"addr": "0x1", "name": "real"}}]},
+    )
+
+    names = IdaWriteClient("http://x/mcp").function_names(["0x1"])
+
+    assert fetched == ["http://x/full.json"]
+    assert names[address_key("0x1")] == "real"
+
+
+def test_truncated_output_without_url_raises(monkeypatch):
+    _truncating_client(monkeypatch, {"result": []}, {"output_truncated": True})
+
+    with pytest.raises(RuntimeError, match="without a download URL"):
+        IdaWriteClient("http://x/mcp").function_names(["0x1"])
 
 
 def test_comment_is_appended_with_func_scope(monkeypatch):

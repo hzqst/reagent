@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from re_agent.backend.ida_mcp import as_list, ida_target, post_jsonrpc
+from re_agent.backend.ida_mcp import as_list, ida_target, post_jsonrpc, recover_truncated
 from re_agent.core.models import StructChange
 
 # Function names IDA generates for symbols it has not identified.  Used to keep
@@ -112,7 +112,13 @@ class IdaWriteClient:
         self._initialized = True
 
     def _call(self, tool: str, arguments: dict[str, Any]) -> Any:
-        """Invoke an MCP tool and return its structured content."""
+        """Invoke an MCP tool and return its structured content.
+
+        Oversized output is downloaded rather than truncated: a bulk
+        ``lookup_funcs`` over a few hundred addresses crosses the server's
+        output limit, and a partial result would make already-named functions
+        look unnamed to ``--only-unnamed``.
+        """
         self._ensure_session()
         result, session_id = post_jsonrpc(
             self._url,
@@ -130,16 +136,23 @@ class IdaWriteClient:
                 if isinstance(block, dict)
             )
             raise RuntimeError(f"IDA MCP tool {tool!r} failed: {text}")
-        return result.get("structuredContent")
+        return recover_truncated(tool, result, self._timeout_s)
 
     # -- reads ----------------------------------------------------------------
 
     def function_names(self, addresses: list[str]) -> dict[str, str]:
         """Return the current name of each target, where IDA knows it.
 
-        Each result is indexed by both its address and its current name, because
-        a proposal may be addressed by either: ``reverse --address sub_455DD0``
-        records the name it was given, while IDA reports the address.
+        Each result is indexed by the address it was queried with, the address
+        IDA resolved it to, and its current name, because a proposal may be
+        addressed by any of the three: ``reverse --address sub_455DD0`` records
+        the name it was given, while IDA reports the address.
+
+        Indexing by the queried address matters most: an address that lands
+        *inside* a function resolves to that function, so without it the
+        containing function's name never matches and ``--only-unnamed`` would
+        treat an already-named function as unnamed -- and renaming it through
+        the interior address renames the whole function.
         """
         if not addresses:
             return {}
@@ -154,9 +167,9 @@ class IdaWriteClient:
             if not isinstance(info, dict) or not info.get("addr"):
                 continue
             current = str(info.get("name") or "")
-            names[address_key(str(info["addr"]))] = current
-            if current:
-                names[address_key(current)] = current
+            for key in (item.get("query"), info.get("addr"), current):
+                if key:
+                    names[address_key(str(key))] = current
         return names
 
     def struct_layout(self, name: str) -> dict[str, Any] | None:
