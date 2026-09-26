@@ -51,15 +51,30 @@ Smoke-test CLI dispatch with `re-agent --help`; a freshly merged feature can be
 confirmed by its subcommand, e.g. `re-agent annotate --help` lists
 `--allow-prototype-changes`.
 
-## Dev tools are NOT included
+## Dev tools are NOT included by default
 
 `ruff`, `mypy`, and `pytest` are **not on PATH** with the default install, so
-the three quality gates in `AGENTS.md` cannot run as-is. Include them with:
+the three quality gates in `AGENTS.md` cannot run as-is. Install them with:
 
 ```bash
 uv tool install --editable /home/hztest2/reagent --force \
   --with pytest --with ruff --with mypy
 ```
+
+This installs the packages into the tool environment (they appear in the
+receipt's `requirements`), **but it does not put their binaries on PATH**:
+`uv tool install` only symlinks the tool's own entrypoints (`re-agent`) into
+`~/.local/bin`. Invoke the extras by full path against the tool's bin dir:
+
+```bash
+TOOLBIN=~/.local/share/uv/tools/auto-re-agent/bin
+"$TOOLBIN/ruff" check src tests examples
+"$TOOLBIN/mypy" src/re_agent/
+"$TOOLBIN/pytest" tests/ -m "not llm and not ghidra" -x --tb=short
+```
+
+Verified 2026-09-26: `ruff 0.16.9` / `mypy 2.3.1` / `pytest 9.1.1` execute from
+that bin dir; `ruff check src tests examples` -> "All checks passed!".
 
 ## Gotchas
 
@@ -70,6 +85,9 @@ uv tool install --editable /home/hztest2/reagent --force \
   environment at `~/.local/share/uv/tools/auto-re-agent/`.
 - Adding dev extras or rebuilding `.venv` is a separate decision from a plain
   reinstall; keep the default reinstall footprint-free unless gates are needed.
+- `--with <pkg>` installs `<pkg>` into the tool env but does **not** expose its
+  binary on PATH; only the tool's own entrypoint is symlinked. Reach extras via
+  `~/.local/share/uv/tools/auto-re-agent/bin/`.
 
 ## Re-check
 
