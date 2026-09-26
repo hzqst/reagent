@@ -12,8 +12,57 @@ from re_agent.parity.source_indexer import SourceIndexer
 from re_agent.verification.candidate import (
     cleanup_candidate_overlay,
     create_candidate_overlay,
+    extract_candidate_body,
     validate_candidate,
 )
+
+
+def test_candidate_body_ignores_a_brace_in_a_leading_comment() -> None:
+    """Regression: a struct sketched in a comment was mistaken for the body.
+
+    Taken from a real candidate, which the extractor rejected as "more than one
+    function body" because the first brace it found was the one in ``// struct
+    KamikazeControl { ... };``.
+    """
+    code = (
+        "// KamikazeControl 由证据可得：8 字节\n"
+        "//   struct KamikazeControl { AircraftClass *Item; CellClass *Cell; };\n"
+        "\n"
+        "void Kamikaze::Add(AircraftClass *pAircraft)\n"
+        "{\n"
+        "    if (!pAircraft->Type->MissileSpawn) { pAircraft->Crash(0); }\n"
+        "}\n"
+    )
+
+    body = extract_candidate_body(code)
+
+    assert body.startswith("{\n    if (!pAircraft->Type->MissileSpawn)")
+    assert body.endswith("}")
+
+
+def test_candidate_body_ignores_braces_in_block_comments_and_literals() -> None:
+    code = (
+        "/* layout: struct S { int a; }; */\n"
+        'const char *kShape = "}";\n'
+        "void Foo() { Bar(); }\n"
+    )
+
+    assert extract_candidate_body(code) == "{ Bar(); }"
+
+
+def test_candidate_body_still_rejects_trailing_code() -> None:
+    with pytest.raises(ValueError, match="exactly one complete function body"):
+        extract_candidate_body("void Foo() { Bar(); }\nvoid Baz() { Qux(); }")
+
+
+def test_candidate_body_still_rejects_class_wrappers() -> None:
+    with pytest.raises(ValueError, match="without namespace/class wrappers"):
+        extract_candidate_body("struct S { void Foo() {} };")
+
+
+def test_candidate_body_rejects_code_with_no_body() -> None:
+    with pytest.raises(ValueError, match="no function body"):
+        extract_candidate_body("void Foo();")
 
 
 def test_candidate_overlay_replaces_only_function_body(tmp_path: Path) -> None:

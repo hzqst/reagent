@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import re
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 
 from re_agent.config.schema import ProjectProfile
@@ -94,14 +95,19 @@ class SourceIndexer:
                                 self.hook_address_index[addr] = (file_class, fn)
 
     @staticmethod
-    def _find_matching_brace(text: str, open_brace_idx: int) -> int | None:
-        depth = 0
+    def _code_offsets(text: str, start: int = 0) -> Iterator[int]:
+        """Yield the offsets of *text* that lie in code.
+
+        Braces inside line comments, block comments, and string or character
+        literals are skipped, so callers can count braces without being misled
+        by a ``struct`` sketch or a ``"{"`` literal in a comment.
+        """
         in_str = False
         str_quote = ""
         in_sl_comment = False
         in_ml_comment = False
         escaped = False
-        i = open_brace_idx
+        i = start
         n = len(text)
         while i < n:
             ch = text[i]
@@ -140,13 +146,28 @@ class SourceIndexer:
                 str_quote = ch
                 i += 1
                 continue
+            yield i
+            i += 1
+
+    @staticmethod
+    def _find_first_code_brace(text: str) -> int | None:
+        """Return the offset of the first brace that is not inside a comment."""
+        for i in SourceIndexer._code_offsets(text):
+            if text[i] == "{":
+                return i
+        return None
+
+    @staticmethod
+    def _find_matching_brace(text: str, open_brace_idx: int) -> int | None:
+        depth = 0
+        for i in SourceIndexer._code_offsets(text, open_brace_idx):
+            ch = text[i]
             if ch == "{":
                 depth += 1
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
                     return i
-            i += 1
         return None
 
     @staticmethod

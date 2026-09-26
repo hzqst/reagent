@@ -16,13 +16,19 @@ from re_agent.utils.process import run_process
 
 
 def extract_candidate_body(code: str) -> str:
-    """Extract the outer C++ body from generated code."""
+    """Extract the outer C++ body from generated code.
+
+    The first brace is located through the comment- and string-aware scanner: a
+    model that sketches a struct in a leading comment (``// struct S { ... };``)
+    would otherwise have that brace taken for the function body's, and the
+    candidate rejected as holding more than one body.
+    """
     from re_agent.parity.source_indexer import SourceIndexer
 
     if code.lstrip().startswith(("namespace ", "class ", "struct ")):
         raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
-    open_brace = code.find("{")
-    if open_brace < 0:
+    open_brace = SourceIndexer._find_first_code_brace(code)
+    if open_brace is None:
         raise ValueError("Candidate has no function body")
     close_brace = SourceIndexer._find_matching_brace(code, open_brace)
     if close_brace is None or code[close_brace + 1 :].strip().strip(";"):
