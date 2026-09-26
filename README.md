@@ -244,6 +244,10 @@ Claude CLI supports real session resume and reports usage/cost metadata. A
 stale CLI login can still require re-authentication even when its auth-status
 command reports a session.
 
+Roles run tool-free (`--tools ""`). Set `claude_tools` to a built-in subset
+such as `"Read,Grep,Glob"` to let a role consult files; MCP tools are denied
+either way.
+
 ### OpenAI-compatible APIs
 
 ```yaml

@@ -31,6 +31,7 @@ llm:
   temperature: 0.0
   timeout_s: 1800
   runner_prompt_file: null   # project prompt for the CLI providers
+  claude_tools: null         # claude-cli only: value for --tools
   pi_tools: null             # Pi only: tool allowlist ("" disables every tool)
   input_cost_per_million: 0.0
   output_cost_per_million: 0.0
@@ -66,6 +67,10 @@ llm:
 - The file is injected as the role's system prompt: `--append-system-prompt-file`
   (claude-cli), `-c developer_instructions=` (codex), `--append-system-prompt`
   (pi). Codex still loads its global `$CODEX_HOME/AGENTS.md`.
+- `claude_tools` is the value for `claude --tools`. Left unset the provider
+  stays tool-free, which is how re-agent has always run Claude; `""` also
+  disables every tool and a subset such as `"Read,Grep,Glob"` allows just
+  those. MCP tools are denied by `--disallowedTools` either way.
 - `pi_tools` narrows Pi's toolset through `--tools`; the allowlist covers
   built-in, extension and custom tools alike, so `"read,grep,ls"` leaves the
   MCP adapter unreachable. An empty string instead passes `--no-tools`.

@@ -42,6 +42,7 @@ class ClaudeCLIProvider:
         max_budget_usd: float | None = None,
         effort: str | None = None,
         runner_prompt_file: str | None = None,
+        tools: str | None = None,
     ) -> None:
         self._model = model
         self._timeout_s = timeout_s
@@ -49,6 +50,7 @@ class ClaudeCLIProvider:
         self._max_budget_usd = max_budget_usd
         self._effort = effort
         self._runner_prompt_file = runner_prompt_file
+        self._tools = tools
         self._conversations: dict[str, _Conversation] = {}
         self.last_metadata = ClaudeCLIMetadata()
 
@@ -95,7 +97,9 @@ class ClaudeCLIProvider:
             self._claude_bin,
             "-p",
             "--tools",
-            "",
+            # Unset keeps the provider tool-free, matching how re-agent has
+            # always run Claude; MCP stays denied whatever the allowlist says.
+            "" if self._tools is None else self._tools,
             "--disallowedTools",
             "mcp__*",
             "--output-format",

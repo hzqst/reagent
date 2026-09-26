@@ -71,6 +71,11 @@ class LLMConfig:
     # CLI's own project-prompt discovery (AGENTS.md / CLAUDE.md) is suppressed
     # and this file is injected as the runner's system-level prompt instead.
     runner_prompt_file: str | None = None
+    # Claude Code CLI only: the value for ``claude --tools``.  Unset keeps the
+    # provider tool-free, which is how re-agent has always run Claude; an empty
+    # string also disables every tool, and a subset such as "Read,Grep,Glob"
+    # allows just those.  MCP tools stay denied either way.
+    claude_tools: str | None = None
     # Pi only: comma-separated tool allowlist passed to ``pi --tools``.  An
     # empty string disables every tool (``--no-tools``); leaving it unset keeps
     # Pi's own default.  A read-only subset such as ``"read,grep,ls"`` lets the

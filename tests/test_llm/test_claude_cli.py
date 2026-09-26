@@ -64,6 +64,26 @@ def test_claude_cli_surfaces_structured_error() -> None:
         provider.send([Message(role="user", content="hello")])
 
 
+def test_tools_are_disabled_by_default() -> None:
+    provider = ClaudeCLIProvider()
+    with patch("re_agent.llm.claude_cli.subprocess.run", return_value=_completed()) as run:
+        provider.send([Message(role="user", content="x")])
+
+    command = run.call_args.args[0]
+    assert command[command.index("--tools") + 1] == ""
+
+
+def test_tool_allowlist_narrows_claude_tools() -> None:
+    provider = ClaudeCLIProvider(tools="Read,Grep,Glob")
+    with patch("re_agent.llm.claude_cli.subprocess.run", return_value=_completed()) as run:
+        provider.send([Message(role="user", content="x")])
+
+    command = run.call_args.args[0]
+    assert command[command.index("--tools") + 1] == "Read,Grep,Glob"
+    # MCP stays denied whatever the allowlist says.
+    assert command[command.index("--disallowedTools") + 1] == "mcp__*"
+
+
 def test_runner_prompt_file_appends_and_excludes_memory(tmp_path: Path) -> None:
     runner_prompt = tmp_path / "SKILL_RUNNER.md"
     runner_prompt.write_text("runner conventions", encoding="utf-8")

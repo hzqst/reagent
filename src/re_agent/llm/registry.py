@@ -58,6 +58,7 @@ def create_provider(config: LLMConfig) -> LLMProvider:
             max_budget_usd=config.max_budget_usd,
             effort=config.effort,
             runner_prompt_file=config.runner_prompt_file,
+            tools=config.claude_tools,
         )
 
     if config.provider in ("openai", "openai-compat"):
