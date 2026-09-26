@@ -18,12 +18,28 @@ from re_agent.utils.evidence import bounded_evidence
 from re_agent.utils.templates import render_template
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-CODE_BLOCK_RE = re.compile(r"```(?:cpp|c\+\+)?\s*\n(.*?)```", re.S)
 REVERSED_TAG_RE = re.compile(r"REVERSED_FUNCTION:\s*(.+)")
+# Fence delimiter lines (``` optionally followed by a language tag), matched as
+# whole lines so an earlier block's closing fence is never read as a later
+# block's opening fence.
+FENCE_LINE_RE = re.compile(r"^[ \t]*```[ \t]*([^\s`]*)[ \t]*\r?$", re.MULTILINE)
 # The proposed symbol arrives as a fenced JSON block alongside the code block.
-# ``CODE_BLOCK_RE`` requires a ``cpp``/``c++``/absent language tag, so a
-# ```json block never matches it.
 JSON_BLOCK_RE = re.compile(r"```json\s*\n(\{.*?\})\s*```", re.S)
+
+
+def _fenced_blocks(response: str) -> list[tuple[str, str]]:
+    """Pair fence delimiter lines into ``(language, body)`` code blocks."""
+    blocks: list[tuple[str, str]] = []
+    language: str | None = None
+    start = 0
+    for match in FENCE_LINE_RE.finditer(response):
+        if language is None:
+            language = match.group(1)
+            start = match.end()
+        else:
+            blocks.append((language, response[start : match.start()]))
+            language = None
+    return blocks
 
 # Tools the model may request, mapped to the backend method that serves them.
 # Order is the order the prompt lists them in.
@@ -377,8 +393,14 @@ class ReverserAgent:
             raise ValueError("Expected a code candidate, received an unresolved evidence request")
         if payload is not None and isinstance(payload.get("code"), str):
             return str(payload["code"]).strip()
-        m = CODE_BLOCK_RE.search(response)
-        return m.group(1).strip() if m else response.strip()
+        blocks = _fenced_blocks(response)
+        for language, body in blocks:
+            if language.lower() in ("cpp", "c++"):
+                return body.strip()
+        for language, body in blocks:
+            if not language:
+                return body.strip()
+        return response.strip()
 
     @staticmethod
     def _extract_tag(response: str) -> str:
