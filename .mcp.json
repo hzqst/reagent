@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "basic-memory": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "basic-memory",
+        "mcp",
+        "--project",
+        "reagent"
+      ],
+      "env": {}
+    },
+    "ida-pro-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:13337/mcp"
+    }
+  }
+}
