@@ -130,10 +130,13 @@ class CodexCLIProvider:
         """Suppress codex's project prompt and use the runner prompt instead.
 
         ``project_doc_max_bytes=0`` is the only override that stops codex from
-        reading the project ``AGENTS.md`` (``project_doc_fallback_filenames``
-        only adds fallbacks).  ``developer_instructions`` replaces codex's base
-        instructions; the JSON encoding keeps the multi-line file contents a
-        single TOML-parseable argv element.
+        reading the project ``AGENTS.md``.  ``project_doc_fallback_filenames``
+        cannot do it: codex consults that list only in a directory where
+        ``AGENTS.md`` is missing, and only for bare filenames — it adds a
+        document rather than replacing one (measured on codex-cli 0.157.1).
+        ``developer_instructions`` replaces codex's base instructions; the JSON
+        encoding keeps the multi-line file contents a single TOML-parseable
+        argv element.
         """
         if self._runner_prompt is None:
             return []
