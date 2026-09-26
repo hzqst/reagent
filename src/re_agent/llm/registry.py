@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from re_agent.config.schema import LLMConfig
+from re_agent.config.schema import DEFAULT_LLM_MODEL, LLMConfig
 from re_agent.llm.protocol import LLMProvider
 
 
@@ -62,8 +62,20 @@ def create_provider(config: LLMConfig) -> LLMProvider:
             timeout_s=config.timeout_s,
         )
 
+    if config.provider == "pi":
+        from re_agent.llm.pi_cli import PiCLIProvider
+
+        # An unchanged default model means "unset": let Pi use its configured default.
+        model = "" if config.model == DEFAULT_LLM_MODEL else config.model
+        return PiCLIProvider(
+            model=model,
+            pi_bin=config.cli_path or "pi",
+            timeout_s=config.timeout_s,
+            effort=config.effort,
+        )
+
     raise ValueError(
         f"Unknown LLM provider: {config.provider!r}. "
         f"Supported providers: 'claude', 'claude-cli', 'openai', "
-        f"'openai-compat', 'codex'."
+        f"'openai-compat', 'codex', 'pi'."
     )

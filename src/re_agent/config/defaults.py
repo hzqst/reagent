@@ -51,6 +51,9 @@ llm:
 #   checker:
 #     provider: "codex"
 #     model: "gpt-5.4"
+#
+# A CLI role may instead use the Pi coding agent: provider: "pi". An empty model
+# defers to Pi's own configured default, and effort maps to Pi's thinking level.
 
 backend:
   type: "ghidra-bridge"

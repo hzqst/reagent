@@ -19,12 +19,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         checks.append({"check": name, "passed": passed, "detail": detail})
 
     add("source_root", Path(config.project_profile.source_root).is_dir(), config.project_profile.source_root)
+    cli_providers = {"claude-cli": "claude", "codex": "codex", "pi": "pi"}
     for role, model in (
         ("reverser", config.agents.reverser or config.llm),
         ("checker", config.agents.checker or config.llm),
     ):
-        if model.provider in {"claude-cli", "codex"}:
-            executable = model.cli_path or ("claude" if model.provider == "claude-cli" else "codex")
+        if model.provider in cli_providers:
+            executable = model.cli_path or cli_providers[model.provider]
             add(role + " executable", shutil.which(executable) is not None, executable)
     validation = config.validation
     commands = validation.build_commands + validation.test_commands + validation.runtime_commands

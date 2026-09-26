@@ -52,3 +52,14 @@ def test_mock_provider_send() -> None:
 def test_registry_creates_codex_provider() -> None:
     provider = create_provider(LLMConfig(provider="codex", model="gpt-5.4"))
     assert provider.supports_conversations
+
+
+def test_registry_creates_pi_provider() -> None:
+    provider = create_provider(LLMConfig(provider="pi", model=""))
+    assert provider.supports_conversations
+
+
+def test_registry_defers_pi_default_model() -> None:
+    assert getattr(create_provider(LLMConfig(provider="pi")), "_model", None) == ""
+    explicit = create_provider(LLMConfig(provider="pi", model="sonnet:high"))
+    assert getattr(explicit, "_model", None) == "sonnet:high"

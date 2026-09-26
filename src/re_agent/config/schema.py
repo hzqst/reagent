@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Anthropic-oriented default model. Providers that defer to their own configured
+# default (for example ``pi``) compare against it to tell "unset" from an override.
+DEFAULT_LLM_MODEL = "claude-sonnet-4-5-20250929"
+
 
 @dataclass
 class ProjectProfile:
@@ -54,7 +58,7 @@ class LLMConfig:
     """LLM provider configuration."""
 
     provider: str = "claude"
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = DEFAULT_LLM_MODEL
     api_key: str | None = None
     base_url: str | None = None
     max_tokens: int = 4096

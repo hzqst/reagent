@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ReAgent is an open-source AI reverse-engineering agent that uses Ghidra
-and LLMs—including Claude, Codex, and OpenAI-compatible models—to reconstruct
+and LLMs—including Claude, Codex, Pi, and OpenAI-compatible models—to reconstruct
 and validate C/C++ functions from compiled binaries. It combines independent
 reverser/checker models, agentic evidence gathering, candidate build and test
 gates, structural verification, and parity analysis in one autonomous workflow.
@@ -21,7 +21,7 @@ Copy this into your agent:
 
 > Help me set up https://github.com/Dryxio/reagent. Read the README, check my installed tools and AI provider setup, and help me install and configure what's missing. Ask which program or project to work on. Start with one small function. Run the setup check (re-agent doctor), explain which AI provider will be used and any API costs, and set a small model-call limit. Then try to recreate that function in C/C++ and show me the result, what passed validation, and what still needs checking.
 
-You'll need a program to analyze and a supported AI provider. Your agent can help connect Ghidra and use an existing authenticated Claude or Codex CLI, or an API setup.
+You'll need a program to analyze and a supported AI provider. Your agent can help connect Ghidra and use an existing authenticated Claude, Codex, or Pi CLI, or an API setup.
 
 **Setup agents:** follow the [setup workflow](docs/agent-setup.md). Detect the host OS and installed toolchain, generate portable validation commands, and migrate incompatible existing commands before starting reversal. The user should not need an OS-specific prompt or edit command syntax manually.
 
@@ -89,6 +89,7 @@ Prefer to install it yourself? Expand the instructions below.
   - OpenAI-compatible API: `OPENAI_API_KEY`
   - Claude CLI: an authenticated local `claude` command
   - Codex CLI: an authenticated local `codex` command
+  - Pi CLI: an authenticated local `pi` command ([pi.dev](https://pi.dev))
 
 ## Installation
 
@@ -264,6 +265,20 @@ llm:
 
 Codex uses the authenticated local `codex exec` command. CLI-provider
 `max_tokens` values are planning allowances, not hard output limits.
+
+### Pi CLI
+
+```yaml
+llm:
+  provider: pi
+  model: ""        # empty defers to Pi's configured default model
+  effort: high     # maps to Pi's thinking level
+```
+
+Pi uses the authenticated local `pi` command
+([pi.dev](https://pi.dev), `@earendil-works/pi-coding-agent`). ReAgent keeps
+Pi's default tools enabled and continues one Pi session across a role's turns.
+`cli_path` is optional; an unchanged `model` defers to Pi's own default.
 
 Omit `agents.reverser` or `agents.checker` to reuse the top-level `llm`
 configuration for that role. A role block is a complete role configuration,
@@ -458,7 +473,7 @@ The full binary-backed reversal workflow currently uses Ghidra through
 
 ### Which LLM providers are supported?
 
-Claude API, Claude CLI, OpenAI-compatible APIs, and Codex CLI are supported.
+Claude API, Claude CLI, OpenAI-compatible APIs, Codex CLI, and Pi CLI are supported.
 The reverser and checker can use different providers or models.
 
 ### Does it modify the original source tree?

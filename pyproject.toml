@@ -23,6 +23,7 @@ keywords = [
     "cybersecurity",
     "claude",
     "codex",
+    "pi",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

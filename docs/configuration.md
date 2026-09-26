@@ -22,7 +22,7 @@ Supported CLI overrides > supported environment variables > YAML config > defaul
 
 ```yaml
 llm:
-  provider: "claude"        # claude | claude-cli | openai | openai-compat | codex
+  provider: "claude"        # claude | claude-cli | openai | openai-compat | codex | pi
   model: "claude-sonnet-4-5-20250929"
   api_key: null
   base_url: null
@@ -40,6 +40,9 @@ Notes:
 - `codex` uses the local `codex` CLI and ChatGPT login credentials instead of an API key
 - `claude-cli` uses the local Claude Code CLI login. `cli_path`,
   `max_budget_usd`, and `effort` are optional.
+- `pi` uses the local [Pi coding agent](https://pi.dev) CLI and its existing
+  login/configuration. `cli_path` is optional; `effort` maps to Pi's `--thinking`
+  level. An empty or unchanged `model` defers to Pi's own configured default.
 
 Independent role overrides inherit the top-level `llm` block only when the
 role is omitted:

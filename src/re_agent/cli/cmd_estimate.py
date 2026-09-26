@@ -66,7 +66,7 @@ def cmd_estimate(args: argparse.Namespace) -> int:
             ("reverser", reverser_config.provider),
             ("checker", checker_config.provider),
         )
-        if provider in {"claude-cli", "codex"}
+        if provider in {"claude-cli", "codex", "pi"}
     ]
     if cli_roles:
         print("Note: max_tokens is an estimate, not a hard provider limit, for CLI roles: " + ", ".join(cli_roles))
