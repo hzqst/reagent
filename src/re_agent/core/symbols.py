@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from re_agent.core.models import SymbolProposal
-from re_agent.utils.storage import atomic_json
+from re_agent.utils.address import address_key
+from re_agent.utils.storage import atomic_json, file_lock
 
 SCHEMA_VERSION = 1
 SYMBOLS_FILENAME = "symbols.json"
@@ -40,7 +41,8 @@ def load_symbols(path: Path) -> list[dict[str, Any]]:
 
 def record_symbol(path: Path, address: str, symbol: SymbolProposal) -> None:
     """Insert or replace the entry for *address*, preserving the others."""
-    key = address.strip().lower()
-    entries = [entry for entry in load_symbols(path) if str(entry.get("address", "")).strip().lower() != key]
-    entries.append({"address": address, **asdict(symbol)})
-    atomic_json(path, {"schema_version": SCHEMA_VERSION, "symbols": entries})
+    key = address_key(address)
+    with file_lock(path):
+        entries = [entry for entry in load_symbols(path) if address_key(str(entry.get("address", ""))) != key]
+        entries.append({"address": address, **asdict(symbol)})
+        atomic_json(path, {"schema_version": SCHEMA_VERSION, "symbols": entries})

@@ -11,9 +11,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from re_agent.backend.ida_comments import comment_result, comment_script
 from re_agent.backend.ida_mcp import as_list, ida_target, post_jsonrpc, recover_truncated
 from re_agent.backend.ida_prototype import prototype_result, prototype_script
 from re_agent.core.models import StructChange
+from re_agent.utils.address import address_key as address_key
 
 # Function names IDA generates for symbols it has not identified.  Used to keep
 # annotations from overwriting names a human already reviewed.
@@ -61,23 +63,6 @@ def is_unnamed(name: str) -> bool:
     ``--only-unnamed`` does not mistake them for reviewed names.
     """
     return _PLACEHOLDER_RE.search(name) is not None
-
-
-def address_key(value: str) -> str:
-    """Canonical match key for an address.
-
-    Headers and IDA spell the same address differently -- ``0x0529160`` versus
-    ``0x529160`` -- so both sides are reduced to a bare lowercase hex value.
-    Anything that is not a hexadecimal address (a symbol name) is returned
-    lowercased and otherwise untouched.
-    """
-    text = value.strip().lower()
-    if text.startswith("0x"):
-        text = text[2:]
-    try:
-        return format(int(text, 16), "x")
-    except ValueError:
-        return value.strip().lower()
 
 
 class IdaWriteClient:
@@ -234,8 +219,8 @@ class IdaWriteClient:
     ) -> list[dict[str, Any]]:
         """Rename functions, returning the per-item results.
 
-        ``allow_overwrite`` stays False by default so an existing name is never
-        silently replaced.  The tool answers with a ``{"func": [...],
+        ``allow_overwrite=False`` prevents taking a name used at another address;
+        it does not protect this function's existing name.  The tool answers with a ``{"func": [...],
         "summary": {...}}`` object rather than a bare list.
         """
         if not renames:
@@ -258,25 +243,10 @@ class IdaWriteClient:
         items = payload.get("func")
         return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
-    def append_function_comment(self, address: str, comment: str) -> None:
-        """Append a function comment; the server dedupes repeated text.
-
-        Raises:
-            RuntimeError: If IDA rejects the comment.  The tool reports per-item
-                failures in-band rather than through ``isError``, so the result
-                must be inspected or failures vanish silently.
-        """
-        if not comment.strip():
-            return
-        results = as_list(
-            self._call(
-                "append_comments",
-                {"items": [{"addr": ida_target(address), "comment": comment, "scope": "func"}]},
-            )
-        )
-        for item in results:
-            if isinstance(item, dict) and item.get("error"):
-                raise RuntimeError(f"IDA rejected the comment for {address}: {item['error']}")
+    def comment_operation(self, mode: str, address: str, **parameters: Any) -> dict[str, Any]:
+        """Read or guardedly replace the regular function comment via a fixed helper."""
+        request = {**parameters, "mode": mode, "address": ida_target(address)}
+        return comment_result(self._call("py_eval", {"code": comment_script(request)}))
 
     def declare_type(self, declaration: str) -> list[dict[str, Any]]:
         """Re-declare a type, replacing the existing definition of that name."""

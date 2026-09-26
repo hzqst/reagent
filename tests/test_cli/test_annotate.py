@@ -182,30 +182,11 @@ def test_truncated_output_without_url_raises(monkeypatch):
         IdaWriteClient("http://x/mcp").function_names(["0x1"])
 
 
-def test_comment_is_appended_with_func_scope(monkeypatch):
+def test_comment_operation_uses_fixed_helper_and_rejects_empty_result(monkeypatch):
     calls = _client(monkeypatch, lambda tool, args: {"result": []})
-
-    IdaWriteClient("http://x/mcp").append_function_comment("0x1", "does a thing")
-
-    tool, args = calls[0]
-    assert tool == "append_comments"
-    assert args["items"][0]["scope"] == "func"
-
-
-def test_comment_error_is_not_swallowed(monkeypatch):
-    """append_comments reports per-item failures in-band, not via isError."""
-    _client(monkeypatch, lambda tool, args: {"result": [{"addr": "0x1", "error": "Address/name not found"}]})
-
-    with pytest.raises(RuntimeError, match="rejected the comment"):
-        IdaWriteClient("http://x/mcp").append_function_comment("0x1", "hi")
-
-
-def test_blank_comment_is_not_sent(monkeypatch):
-    calls = _client(monkeypatch, lambda tool, args: {"result": []})
-
-    IdaWriteClient("http://x/mcp").append_function_comment("0x1", "   ")
-
-    assert calls == []
+    with pytest.raises(RuntimeError, match="no unique result"):
+        IdaWriteClient("http://x/mcp").comment_operation("read", "0x1")
+    assert calls[0][0] == "py_eval"
 
 
 def test_read_declaration_rejects_non_identifier(monkeypatch):

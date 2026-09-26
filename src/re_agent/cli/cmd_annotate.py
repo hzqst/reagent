@@ -12,10 +12,11 @@ import json
 import re
 import sys
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from re_agent.backend.ida_comments import managed_comment
 from re_agent.backend.ida_prototype import PrototypeOperationError
 from re_agent.backend.ida_write import (
     IdaWriteClient,
@@ -27,6 +28,7 @@ from re_agent.config.loader import load_config
 from re_agent.config.schema import ReAgentConfig
 from re_agent.core.models import StructChange, SymbolProposal
 from re_agent.core.symbols import load_symbols, symbols_path
+from re_agent.utils.address import checked_address
 
 WRITE_BACKENDS = frozenset({"ida-mcp", "ida"})
 
@@ -45,11 +47,16 @@ class _Entry:
     prototype_plan: dict[str, Any] = field(default_factory=dict)
     name_status: str = "pending"
     comment_status: str = "pending"
+    comment_report: dict[str, Any] = field(default_factory=dict)
 
 
 def cmd_annotate(args: argparse.Namespace) -> int:
     if args.allow_prototype_changes and args.allow_struct_changes:
         raise ValueError("Apply prototype and shared struct changes in separate invocations, with fresh proposals")
+    if args.comments_only and (args.only_unnamed or args.allow_prototype_changes or args.allow_struct_changes):
+        raise ValueError("--comments-only cannot be combined with --only-unnamed or type-change flags")
+    if args.replace_function_comment and not args.address:
+        raise ValueError("--replace-function-comment requires --address to bound whole-comment replacement")
     config = load_config(Path(args.config))
     backend_type = config.backend.type.lower().replace("_", "-")
     if backend_type not in WRITE_BACKENDS:
@@ -68,31 +75,26 @@ def cmd_annotate(args: argparse.Namespace) -> int:
 
     _decide(entries, names, only_unnamed=args.only_unnamed, include_flagged=args.include_flagged)
     for entry in entries:
-        entry.name_status = "pending" if entry.action == "apply" else entry.action
-        entry.comment_status = (
-            entry.action if entry.action != "apply" else
-            "would-apply" if entry.proposal.comment else "absent"
-        )
-        _plan_prototype(client, entry, allowed=args.allow_prototype_changes)
+        entry.name_status = "disabled" if args.comments_only else entry.action if entry.action != "apply" else "pending"
+        _plan_comment(client, entry, replace=args.replace_function_comment)
+        if args.comments_only:
+            if entry.proposal.prototype:
+                entry.prototype_report = {"status": "disabled", "reason": "--comments-only"}
+        else:
+            _plan_prototype(client, entry, allowed=args.allow_prototype_changes)
 
-    # Comments go first: a proposal may be addressed by a symbol name, and
-    # renaming replaces that name, leaving the old one unresolvable.
     if args.write:
         for entry in entries:
-            if entry.action == "apply" and entry.proposal.comment:
-                try:
-                    client.append_function_comment(entry.address, _comment_text(entry.proposal))
-                    entry.comment_status = "applied"
-                except (RuntimeError, OSError, ValueError) as exc:
-                    entry.comment_status = "failed"
-                    entry.notes.append(str(exc))
+            if entry.comment_status == "would-apply":
+                _apply_comment(client, entry)
 
-    renames = [(e.address, e.proposal.name) for e in entries if e.action == "apply"]
+    rename_entries = [] if args.comments_only else [e for e in entries if e.action == "apply"]
+    renames = [(e.address, e.proposal.name) for e in rename_entries]
     try:
-        results = client.rename_functions(renames, dry_run=not args.write, allow_overwrite=False)
+        results = client.rename_functions(renames, dry_run=not args.write, allow_overwrite=False) if renames else []
     except (RuntimeError, OSError, ValueError) as exc:
         results = [{"error": str(exc)} for _ in renames]
-    for index, entry in enumerate([e for e in entries if e.action == "apply"]):
+    for index, entry in enumerate(rename_entries):
         result = results[index] if index < len(results) else {"error": "IDA returned no rename result"}
         if result.get("error") or result.get("ok") is False:
             entry.action = "error"
@@ -120,6 +122,8 @@ def cmd_annotate(args: argparse.Namespace) -> int:
         if args.save:
             if any(e.prototype_report.get("status") == "recovery-failed" for e in entries):
                 save_error = "Save suppressed: a function type could not be restored"
+            elif any(e.comment_status == "failed" for e in entries):
+                save_error = "Save suppressed: a function comment write could not be confirmed; inspect the IDB"
             else:
                 try:
                     client.save()
@@ -130,11 +134,48 @@ def cmd_annotate(args: argparse.Namespace) -> int:
     _report(entries, write=args.write, saved=saved, save_error=save_error)
     failed = any(
         e.action not in {"apply", "skip-named", "skip-flagged"}
-        or e.comment_status == "failed"
+        or e.comment_status in {"failed", "conflict", "rejected"}
         or e.prototype_report.get("status") in {"invalid-prototype", "rejected", "reverted", "recovery-failed"}
         for e in entries
     )
     return 1 if failed or save_error else 0
+
+
+def _plan_comment(client: IdaWriteClient, entry: _Entry, *, replace: bool) -> None:
+    entry.comment_status = entry.action if entry.action != "apply" else "absent"
+    if entry.action != "apply" or not entry.proposal.comment.strip():
+        return
+    report = entry.comment_report
+    try:
+        snapshot = client.comment_operation("read", entry.address)
+        report.update(address=snapshot["address"], current=snapshot["comment"])
+        proposed = managed_comment(snapshot["comment"], _comment_text(entry.proposal), replace=replace)
+        report["proposed"] = proposed
+        entry.comment_status = "unchanged" if proposed == snapshot["comment"] else "would-apply"
+    except ValueError as exc:
+        entry.comment_status = "conflict"
+        report["reason"] = str(exc)
+    except (RuntimeError, OSError, KeyError) as exc:
+        entry.comment_status = "rejected"
+        report["reason"] = str(exc)
+
+
+def _apply_comment(client: IdaWriteClient, entry: _Entry) -> None:
+    report = entry.comment_report
+    try:
+        client.comment_operation(
+            "apply", report["address"], expected=report["current"], proposed=report["proposed"],
+        )
+        # A separate read verifies the stored slot, not the helper's write response.
+        after = client.comment_operation("read", report["address"])
+        report["after"] = after["comment"]
+        if after["comment"] != report["proposed"]:
+            raise RuntimeError("Independent function comment readback mismatch")
+        entry.comment_status = "applied"
+    except (RuntimeError, OSError, ValueError, KeyError) as exc:
+        # Never retry an ambiguous write or overwrite a subsequent human edit.
+        entry.comment_status = "failed"
+        report["reason"] = str(exc)
 
 
 def _plan_prototype(client: IdaWriteClient, entry: _Entry, *, allowed: bool) -> None:
@@ -210,21 +251,44 @@ def _apply_prototype(client: IdaWriteClient, entry: _Entry) -> None:
 
 def _load_entries(args: argparse.Namespace, config: ReAgentConfig) -> list[_Entry]:
     if args.from_hooks:
-        return _hook_entries(args.from_hooks, config)
-
-    path = Path(args.symbols) if args.symbols else symbols_path(Path(config.output.report_dir))
-    if not path.exists():
-        raise ValueError(
-            f"No symbol proposals at {path}. Run `re-agent reverse` first, "
-            "or pass --symbols / --from-hooks."
-        )
+        rows = [{"address": entry.address, **asdict(entry.proposal)}
+                for entry in _hook_entries(args.from_hooks, config)]
+    else:
+        path = Path(args.symbols) if args.symbols else symbols_path(Path(config.output.report_dir))
+        if not path.exists():
+            raise ValueError(
+                f"No symbol proposals at {path}. Run `re-agent reverse` first, "
+                "or pass --symbols / --from-hooks."
+            )
+        rows = load_symbols(path)
     entries: list[_Entry] = []
-    for raw in load_symbols(path):
+    for raw in _select_rows(rows, args.address):
         address = str(raw.get("address") or "").strip()
         proposal = SymbolProposal.from_dict(raw)
-        if address and proposal is not None:
-            entries.append(_Entry(address=address, proposal=proposal))
+        if not address or proposal is None:
+            raise ValueError(f"Invalid symbol proposal at {address!r}")
+        entries.append(_Entry(address=address, proposal=proposal))
     return entries
+
+
+def _select_rows(rows: list[dict[str, Any]], addresses: list[str] | None) -> list[dict[str, Any]]:
+    """Scope first, then reject conflicts before any backend access or mutation."""
+    requested = {address_key(checked_address(address)) for address in addresses or []}
+    selected: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        key = address_key(str(raw.get("address") or ""))
+        if requested and key not in requested:
+            continue
+        normalized = {**raw, "address": key}
+        if key in selected and {**selected[key], "address": key} != normalized:
+            raise ValueError(
+                f"Conflicting symbol proposals for address {key}; regenerate or resolve the selected entries"
+            )
+        selected[key] = raw
+    missing = requested - selected.keys()
+    if missing:
+        raise ValueError("No symbol proposal for requested address(es): " + ", ".join(sorted(missing)))
+    return list(selected.values())
 
 
 def _hook_entries(paths: list[str], config: ReAgentConfig) -> list[_Entry]:
@@ -412,7 +476,7 @@ def _report(entries: list[_Entry], *, write: bool, saved: bool, save_error: str 
         "undo": [
             {"address": entry.address, "current_name": entry.current_name, "new_name": entry.proposal.name}
             for entry in entries
-            if entry.action == "apply"
+            if entry.name_status in {"applied", "would-apply"}
         ],
         "entries": [
             {
@@ -425,6 +489,7 @@ def _report(entries: list[_Entry], *, write: bool, saved: bool, save_error: str 
                 "prototype": entry.prototype_report or None,
                 "name_status": entry.name_status,
                 "comment_status": entry.comment_status,
+                "comment": entry.comment_report or None,
             }
             for entry in entries
         ],
