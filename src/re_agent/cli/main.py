@@ -69,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # annotate
     ann_p = sub.add_parser("annotate", help="Apply symbol proposals to an IDA database")
+    ann_p.add_argument("--address", action="append", help="Select a hexadecimal address (repeatable)")
+    ann_p.add_argument("--comments-only", action="store_true", help="Apply only function comments")
+    ann_p.add_argument(
+        "--replace-function-comment", action="store_true",
+        help="Replace the whole regular function comment; requires --address",
+    )
     ann_p.add_argument("--symbols", help="Proposals file (default: report_dir/symbols.json)")
     ann_p.add_argument(
         "--from-hooks",

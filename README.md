@@ -403,6 +403,54 @@ Global options must precede the subcommand, for example
 
 Use `re-agent <command> --help` for the exact option list.
 
+## Refresh selected function comments in IDA
+
+Use a repeatable hexadecimal `--address` filter to select proposals before any
+backend calls. A requested address with no matching proposal is an error.
+`--comments-only` disables renames and type operations, including type queries:
+
+```sh
+re-agent annotate --address 0x4A3890 --comments-only
+re-agent annotate --address 0x4A3890 --comments-only --write --save
+```
+
+Function comments use a single `[re-agent:begin]` / `[re-agent:end]` block.
+Re-annotation replaces that block and preserves all text outside it. An identical
+comment is reported as `unchanged`. Only the **non-repeatable function comment**
+is updated; address comments and repeatable function comments remain untouched.
+The server must expose `py_eval` for the fixed comment helper.
+
+A nonempty comment without a valid unique block is reported as a conflict and
+left unchanged. This includes comments written by older versions, whose ownership
+cannot be established automatically. To migrate one, inspect the complete
+current/proposed text in the dry-run report, then explicitly replace it:
+
+```sh
+re-agent annotate --address 0x4A3890 --comments-only --replace-function-comment
+re-agent annotate --address 0x4A3890 --comments-only --replace-function-comment --write --save
+```
+
+`--replace-function-comment` requires `--address` and replaces the **whole**
+ordinary function comment, including human text. Before each write the helper
+checks the original comment again; a separate read verifies the result. Failed or
+unconfirmed writes are reported with a nonzero exit status, never retried blindly,
+and suppress `--save`; inspect the IDB before retrying. Comment conflicts can
+coexist with eligible name/type changes in normal mode; use `--comments-only`
+when only comments should change. Writes are not a batch transaction.
+
+`--only-unnamed` retains its existing whole-entry skip behavior. It cannot be
+combined with `--comments-only`, nor can either type-change flag be combined with
+`--comments-only`. Normal annotation still applies proposed names verbatim:
+`allow_overwrite=False` prevents name collisions with other addresses, not
+replacement of the target's current name. Project naming suffixes are not inferred.
+
+`reverse` replaces the entire proposal for an equivalent hexadecimal address,
+under a file lock. On loading existing files, `annotate` collapses identical
+selected rows but rejects conflicting proposals for the same address before any
+writes. It never assumes the last row is newest. Unselected conflicts do not
+block a scoped operation. Symbol-name aliases are not matched by `--address`;
+regenerate proposals with numeric addresses for address-based selection.
+
 ## Apply function prototype proposals in IDA
 
 `reverse` can attach an optional `prototype` to each symbol in

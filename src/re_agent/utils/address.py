@@ -44,3 +44,20 @@ def checked_address(value: object) -> str:
     if not isinstance(value, str) or re.fullmatch(r"(?:0[xX])?[0-9a-fA-F]+", value.strip()) is None:
         raise ValueError(f"Invalid hexadecimal address: {value!r}")
     return normalize_address(value)
+
+
+def address_key(value: str) -> str:
+    """Canonical match key for an address.
+
+    Headers and IDA spell the same address differently -- ``0x0529160`` versus
+    ``0x529160`` -- so both sides are reduced to a bare lowercase hex value.
+    Anything that is not a hexadecimal address (a symbol name) is returned
+    lowercased and otherwise untouched.
+    """
+    text = value.strip().lower()
+    if text.startswith("0x"):
+        text = text[2:]
+    try:
+        return format(int(text, 16), "x")
+    except ValueError:
+        return value.strip().lower()

@@ -30,12 +30,16 @@ class FakeClient:
         self.current = copy.deepcopy(self.original)
         self.fail = {}
         self.saved = False
+        self.comment = ""
 
     def function_names(self, addresses):
         return {"4a3890": "FileClass_ReadWholeFile", "old_name": "FileClass_ReadWholeFile"}
 
-    def append_function_comment(self, address, comment):
-        self.calls.append(("comment", address))
+    def comment_operation(self, mode, address, **parameters):
+        self.calls.append(("comment-" + mode, address))
+        if mode == "apply":
+            self.comment = parameters["proposed"]
+        return {"ok": True, "address": "0x4a3890", "comment": self.comment}
 
     def rename_functions(self, renames, *, dry_run, allow_overwrite):
         self.calls.append(("rename-dry" if dry_run else "rename", renames))
@@ -91,7 +95,7 @@ def annotate(monkeypatch, tmp_path, capsys):
             path.write_text(json.dumps({"schema_version": 1, "symbols": rows}))
         args = dict(config="unused.yaml", symbols=str(path), from_hooks=None, only_unnamed=False,
                     include_flagged=False, allow_struct_changes=False, allow_prototype_changes=True,
-                    write=False, save=False)
+                    write=False, save=False, address=None, comments_only=False, replace_function_comment=False)
         args.update(options)
         code = cmd_annotate(argparse.Namespace(**args))
         report = json.loads(capsys.readouterr().out)
@@ -108,7 +112,7 @@ def test_dry_run_reports_both_types_without_writes_or_save(annotate):
     assert report["entries"][0]["prototype"]["current"] == OLD
     assert report["entries"][0]["prototype"]["proposed"] == NEW
     assert report["entries"][0]["prototype"]["status"] == "would-apply"
-    assert {mode for mode, _ in client.calls} == {"read", "plan", "rename-dry"}
+    assert {mode for mode, _ in client.calls} == {"read", "plan", "rename-dry", "comment-read"}
     assert client.original == client.current
 
 
@@ -181,7 +185,7 @@ def test_legacy_file_does_not_call_type_tools(annotate):
     code, report = run(raw={"name": "f", "comment": "hello"}, write=True, save=True)
     assert code == 0
     assert report["entries"][0]["prototype"] is None
-    assert [mode for mode, _ in client.calls] == ["comment", "rename", "save"]
+    assert [mode for mode, _ in client.calls] == ["comment-read", "comment-apply", "comment-read", "rename", "save"]
 
 
 @pytest.mark.parametrize("mode", ["plan", "apply", "verify", "save"])
