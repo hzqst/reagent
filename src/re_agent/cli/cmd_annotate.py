@@ -51,6 +51,10 @@ class _Entry:
 
 
 def cmd_annotate(args: argparse.Namespace) -> int:
+    inferred = getattr(args, "allow_inferred_prototypes", False)
+    corrections = getattr(args, "allow_abi_type_corrections", False)
+    if (inferred or corrections) and (not args.allow_prototype_changes or not args.address):
+        raise ValueError("Extended prototype flags require --allow-prototype-changes and --address")
     if args.allow_prototype_changes and args.allow_struct_changes:
         raise ValueError("Apply prototype and shared struct changes in separate invocations, with fresh proposals")
     if args.comments_only and (args.only_unnamed or args.allow_prototype_changes or args.allow_struct_changes):
@@ -81,7 +85,8 @@ def cmd_annotate(args: argparse.Namespace) -> int:
             if entry.proposal.prototype:
                 entry.prototype_report = {"status": "disabled", "reason": "--comments-only"}
         else:
-            _plan_prototype(client, entry, allowed=args.allow_prototype_changes)
+            _plan_prototype(client, entry, allowed=args.allow_prototype_changes,
+                            inferred=inferred, corrections=corrections)
 
     if args.write:
         for entry in entries:
@@ -135,7 +140,9 @@ def cmd_annotate(args: argparse.Namespace) -> int:
     failed = any(
         e.action not in {"apply", "skip-named", "skip-flagged"}
         or e.comment_status in {"failed", "conflict", "rejected"}
-        or e.prototype_report.get("status") in {"invalid-prototype", "rejected", "reverted", "recovery-failed"}
+        or e.prototype_report.get("status") in {
+            "invalid-prototype", "rejected", "reverted", "recovery-failed", "unsupported-change", "stale",
+        }
         for e in entries
     )
     return 1 if failed or save_error else 0
@@ -178,12 +185,17 @@ def _apply_comment(client: IdaWriteClient, entry: _Entry) -> None:
         report["reason"] = str(exc)
 
 
-def _plan_prototype(client: IdaWriteClient, entry: _Entry, *, allowed: bool) -> None:
+def _plan_prototype(
+    client: IdaWriteClient, entry: _Entry, *, allowed: bool, inferred: bool = False, corrections: bool = False,
+) -> None:
     prototype = entry.proposal.prototype
     if prototype is None:
         return
     report = entry.prototype_report
-    report.update(proposed=prototype.declaration, current=None, status="pending")
+    report.update(proposed=prototype.declaration, current=None, status="pending",
+                  confidence=prototype.confidence, evidence_kind=prototype.evidence_kind,
+                  review_status=prototype.review_status, review_notes=prototype.review_notes,
+                  evidence_details=prototype.evidence_details, abi_evidence=prototype.abi_evidence)
     if entry.action != "apply":
         report.update(status=entry.action)
         return
@@ -196,25 +208,52 @@ def _plan_prototype(client: IdaWriteClient, entry: _Entry, *, allowed: bool) -> 
         if not allowed:
             report.update(status="disabled", reason="Requires --allow-prototype-changes")
             return
-        if prototype.review_status != "approved" or not entry.proposal.checker_ok:
-            report.update(status="skip-unreviewed", reason="Prototype needs independent approval without disputes")
+        if prototype.review_status == "disputed" or not entry.proposal.checker_ok:
+            report.update(status="disputed", reason="Prototype or symbol has unresolved disputes")
             return
-        if prototype.confidence != "verified" or not prototype.evidence:
-            report.update(status="skip-unverified", reason="Prototype requires deterministic evidence")
+        if prototype.review_status != "approved":
+            report.update(status="unreviewed", reason="Prototype needs independent approval")
+            return
+        if not prototype.evidence:
+            report.update(status="insufficient-evidence", reason="Missing prototype evidence")
             return
         if not prototype.expected_current:
             raise ValueError("Missing original function type snapshot; regenerate the proposal")
+        # Read-only classification includes supported corrections even without authorization.
+        # Authorization is checked below and is passed independently to the write helper.
         plan = client.prototype_operation(
             "plan", state["address"], declaration=prototype.declaration,
             expected_current=prototype.expected_current, required_types=prototype.required_types,
+            allow_abi_type_corrections=True,
         )
+        differences = plan.get("differences", [])
+        requires_corrections = plan.get("requires_abi_corrections", False)
+        report.update(current=plan["current"]["declaration"], proposed=plan["proposed"],
+                      differences=differences, abi_check=plan.get("abi_check", "compatible"))
+        if prototype.confidence != "verified" or requires_corrections:
+            required = {"header", "version", "address_binding"}
+            missing = sorted(key for key in required if not prototype.evidence_details.get(key, "").strip())
+            positions = ["calling_convention", *[item["position"] for item in differences]]
+            missing += [key for key in positions if not prototype.abi_evidence.get(key, "").strip()]
+            if not prototype.evidence_kind or missing:
+                report.update(status="insufficient-evidence",
+                              reason="Regenerate and review structured header/version/binding and ABI evidence",
+                              missing_evidence=missing + ([] if prototype.evidence_kind else ["evidence_kind"]))
+                return
+        needed = []
+        if prototype.confidence != "verified" and not inferred:
+            needed.append("--allow-inferred-prototypes")
+        if requires_corrections and not corrections:
+            needed.append("--allow-abi-type-corrections")
+        if needed:
+            report.update(status="needs-opt-in", required_flags=needed,
+                          reason="Review evidence and type differences; opt in with --address")
+            return
+        plan["allow_abi_type_corrections"] = corrections
         entry.prototype_plan = plan
-        report.update(
-            current=plan["current"]["declaration"], proposed=plan["proposed"],
-            status="unchanged" if plan["unchanged"] else "would-apply",
-        )
+        report.update(status="unchanged" if plan["unchanged"] else "would-apply")
     except (RuntimeError, OSError, ValueError, KeyError) as exc:
-        report.update(status="rejected", reason=str(exc))
+        report.update(status=exc.code if isinstance(exc, PrototypeOperationError) else "rejected", reason=str(exc))
 
 
 def _apply_prototype(client: IdaWriteClient, entry: _Entry) -> None:
@@ -226,6 +265,7 @@ def _apply_prototype(client: IdaWriteClient, entry: _Entry) -> None:
     try:
         client.prototype_operation(
             "apply", address, original=original, declaration=plan["proposed"], proposed_key=plan["proposed_key"],
+            allow_abi_type_corrections=plan.get("allow_abi_type_corrections", False),
         )
         verifying = True
         verified = client.prototype_operation("verify", address, proposed_key=plan["proposed_key"])

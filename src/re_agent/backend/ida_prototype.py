@@ -15,9 +15,10 @@ PROTOTYPE_MARKER = "__RE_AGENT_PROTOTYPE__"
 class PrototypeOperationError(RuntimeError):
     """A helper failure with an explicit indication of possible mutation."""
 
-    def __init__(self, message: str, *, write_attempted: bool) -> None:
+    def __init__(self, message: str, *, write_attempted: bool, code: str = "rejected") -> None:
         super().__init__(message)
         self.write_attempted = write_attempted
+        self.code = code
 
 
 def prototype_script(request: dict[str, Any]) -> str:
@@ -45,6 +46,7 @@ def prototype_result(payload: Any) -> dict[str, Any]:
         raise PrototypeOperationError(
             f"IDA prototype operation failed: {result}",
             write_attempted=not isinstance(result, dict) or result.get("write_attempted") is not False,
+            code=str(result.get("code", "rejected")) if isinstance(result, dict) else "rejected",
         )
     return result
 
@@ -59,6 +61,12 @@ def _ida_prototype(request: dict[str, Any]) -> dict[str, Any]:
     funcs = importlib.import_module("ida_funcs")
     api = importlib.import_module("idaapi")
     hx = importlib.import_module("ida_hexrays")
+
+    class UnsupportedChange(ValueError):
+        pass
+
+    class StaleProposal(ValueError):
+        pass
 
     def serial(tif: Any) -> list[str]:
         return [part.hex() if part else "" for part in tif.serialize()]
@@ -135,38 +143,72 @@ def _ida_prototype(request: dict[str, Any]) -> dict[str, Any]:
             return ("stack", loc.stkoff())
         if loc.is_badloc():
             return ("none",)
-        raise ValueError("Unsupported ABI argument location")
+        raise UnsupportedChange("Unsupported ABI argument location")
 
-    def refinement(before: Any, after: Any) -> None:
+    def refinement(before: Any, after: Any) -> tuple[list[dict[str, str]], bool]:
         old, new = ti.func_type_data_t(), ti.func_type_data_t()
         if not before.get_func_details(old) or not after.get_func_details(new):
-            raise ValueError("Cannot calculate function ABI")
+            raise UnsupportedChange("Cannot calculate function ABI")
         old_cc = old.get_cc() if hasattr(old, "get_cc") else old.cc
         new_cc = new.get_cc() if hasattr(new, "get_cc") else new.cc
         allowed = {ti.CM_CC_CDECL, ti.CM_CC_STDCALL, ti.CM_CC_FASTCALL, ti.CM_CC_THISCALL}
         if old_cc not in allowed or old_cc != new_cc:
-            raise ValueError("Calling convention changes or special conventions are unsupported")
-        if old.flags != new.flags or len(old) != len(new) or not old.rettype.equals_to(new.rettype):
-            raise ValueError("Return type, function flags and argument count must be preserved")
+            raise UnsupportedChange("Calling convention changes or special conventions are unsupported")
+        if old.flags != new.flags or len(old) != len(new):
+            raise UnsupportedChange("Function flags and argument count must be preserved")
         if location(old.retloc) != location(new.retloc) or old.stkargs != new.stkargs:
-            raise ValueError("Return/stack ABI layout changed")
-        for previous, proposed in zip(old, new, strict=True):
-            a, b = previous.type, proposed.type
-            if previous.flags != proposed.flags or location(previous.argloc) != location(proposed.argloc):
-                raise ValueError("Argument flags or ABI location changed")
+            raise UnsupportedChange("Return/stack ABI layout changed")
+        differences: list[dict[str, str]] = []
+        corrections = False
+
+        def complete_class(tif: Any) -> bool:
+            name = tif.get_type_name()
+            return bool(tif.is_udt() and not tif.is_union() and name
+                        and existing_type(name).is_udt() and tif.get_size() != api.BADSIZE)
+
+        def data_pointer(tif: Any) -> bool:
+            if not tif.is_ptr() or tif.is_const() or tif.is_volatile():
+                return False
+            obj = tif.get_pointed_object()
+            return bool(not obj.is_const() and not obj.is_volatile()
+                        and (obj.is_void() or complete_class(obj)))
+
+        def compare(a: Any, b: Any, position: str) -> None:
+            nonlocal corrections
             if a.equals_to(b):
-                continue
-            if not a.is_ptr() or not b.is_ptr() or a.get_size() != b.get_size():
-                raise ValueError("Only void pointer to named struct pointer refinements are supported")
-            pointee_a, pointee_b = a.get_pointed_object(), b.get_pointed_object()
-            if (not pointee_a.is_void() or not pointee_b.is_udt() or pointee_b.is_union()
-                    or a.is_const() != b.is_const() or a.is_volatile() != b.is_volatile()
-                    or pointee_a.is_const() != pointee_b.is_const()
-                    or pointee_a.is_volatile() != pointee_b.is_volatile()):
-                raise ValueError("Only qualifier-preserving void pointer refinements are supported")
-            name = pointee_b.get_type_name()
-            if not name or not existing_type(name).is_udt() or pointee_b.get_size() == api.BADSIZE:
-                raise ValueError("Refinement requires an existing complete named struct type")
+                return
+            difference = {"position": position, "before": str(a), "after": str(b)}
+            differences.append(difference)
+            same_width = a.get_size() == b.get_size() and a.get_size() not in {0, api.BADSIZE}
+            if position != "return" and a.is_ptr() and b.is_ptr() and same_width:
+                pa, pb = a.get_pointed_object(), b.get_pointed_object()
+                if (pa.is_void() and complete_class(pb) and a.is_const() == b.is_const()
+                        and a.is_volatile() == b.is_volatile() and pa.is_const() == pb.is_const()
+                        and pa.is_volatile() == pb.is_volatile()):
+                    difference["kind"] = "refinement"
+                    return
+            integer_change = a.is_integral() and (
+                b.is_integral() or data_pointer(b)
+            )
+            # bool/enums, qualifiers, floats and arbitrary pointer casts are not corrections.
+            if (same_width and integer_change and not a.is_bool() and not b.is_bool()
+                    and not a.is_enum() and not b.is_enum()
+                    and not a.is_const() and not a.is_volatile()
+                    and not b.is_const() and not b.is_volatile()):
+                difference["kind"] = "abi-type-correction"
+                corrections = True
+                return
+            raise UnsupportedChange("Only qualifier-preserving void pointer refinements and "
+                                    "same-width integer to integer/data-pointer corrections are supported: " + position)
+
+        compare(old.rettype, new.rettype, "return")
+        for index, (previous, proposed) in enumerate(zip(old, new, strict=True)):
+            if previous.flags != proposed.flags or location(previous.argloc) != location(proposed.argloc):
+                raise UnsupportedChange("Argument flags or ABI location changed")
+            compare(previous.type, proposed.type, f"arg:{index}")
+        if corrections and request.get("allow_abi_type_corrections") is not True:
+            raise UnsupportedChange("Return type or argument correction requires --allow-abi-type-corrections")
+        return differences, corrections
 
     write_attempted = False
     try:
@@ -187,16 +229,17 @@ def _ida_prototype(request: dict[str, Any]) -> dict[str, Any]:
                 existing_type(name)
             expected = parse(request["expected_current"])
             proposed = parse(request["declaration"])
-            refinement(expected, proposed)
+            differences, corrections = refinement(expected, proposed)
             unchanged = current.equals_to(proposed)
             if not unchanged and not current.equals_to(expected):
-                raise ValueError("Stale prototype proposal: current type differs from expected_current")
+                raise StaleProposal("Stale prototype proposal: current type differs from expected_current")
             return {"ok": True, "current": state, "proposed": str(proposed),
-                    "proposed_key": serial(proposed)[0], "unchanged": unchanged}
+                    "proposed_key": serial(proposed)[0], "unchanged": unchanged,
+                    "differences": differences, "requires_abi_corrections": corrections, "abi_check": "compatible"}
         if mode == "apply":
             original = request["original"]
             if state["serialized"] != original["serialized"] or state["explicit"] != original["explicit"]:
-                raise ValueError("Stale prototype: changed after preflight")
+                raise StaleProposal("Stale prototype: changed after preflight")
             proposed = parse(request["declaration"])
             refinement(current, proposed)
             if serial(proposed)[0] != request["proposed_key"]:
@@ -231,4 +274,6 @@ def _ida_prototype(request: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "current": restored}
         raise ValueError("Unknown prototype operation")
     except Exception as exc:
-        return {"ok": False, "error": str(exc), "write_attempted": write_attempted}
+        return {"ok": False, "error": str(exc), "write_attempted": write_attempted,
+                "code": "unsupported-change" if isinstance(exc, UnsupportedChange) else
+                        "stale" if isinstance(exc, StaleProposal) else "rejected"}

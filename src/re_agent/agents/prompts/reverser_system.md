@@ -47,12 +47,30 @@ the instruction that proves it. Omit the whole json block rather than guessing:
 an absent proposal is better than an invented name.
 
 `prototype` is optional and has its OWN evidence and confidence. A verified name
-does not verify its prototype. Propose only a qualifier-preserving `void *` to
-an existing, complete named struct/class pointer refinement. Preserve the return
-type, calling convention, argument count, argument locations and all other types.
-Use an explicit calling convention and explicit binary parameters (including
-`this`); a C++ member declaration with implicit `this` is insufficient. Cite the
-matching header/address and binary ABI evidence. Omit the proposal when types,
-hidden parameters, calling convention, or evidence are unresolved or disputed.
+does not verify its prototype. Preserve the calling convention, argument count,
+argument/return locations, stack layout, qualifiers and hidden parameters.
+The default supported change is a qualifier-preserving `void *` argument to an
+existing complete named struct/class pointer. Extended, explicitly opted-in
+annotation can also correct same-width integers to integers or ordinary data
+pointers (void or complete named struct/class pointers), including return values.
+Do not propose floats, bool/enums, aggregate-by-value changes, function pointers,
+arbitrary pointer casts, variadics or special calling conventions.
+Use an explicit calling convention and explicit binary parameters including
+`this`. Constructor source syntax does not determine its binary return type.
+
+For an inferred prototype or any extended correction, include:
+- `evidence_kind`: `address-bound` if a source explicitly binds the declaration
+  to the address, otherwise `signature-bound` for a header definition bound by
+  binary behavior. The latter remains `confidence: "inferred"`.
+- `evidence_details`: object with non-empty `header` (path/lines and definition),
+  `version` (why the header matches this binary), and `address_binding`
+  (address annotation or specific control flow, offsets and call-site matches).
+- `abi_evidence`: object with `calling_convention` and an entry for EVERY changed
+  type: `return`, `arg:0`, `arg:1`, etc. Indices include explicit `this`.
+  Cite binary locations and explain each type; return evidence must cover all
+  returning paths, not merely one instruction. Signedness needs semantic evidence.
+
+Keep the existing `evidence` list as well. Equal widths/locations prove layout
+compatibility only, not type semantics. Omit proposals with unresolved evidence.
 Do not emit expected_current or review fields: the harness supplies the original
 backend snapshot and an independent checker reviews each final proposal.
