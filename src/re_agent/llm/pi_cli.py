@@ -102,6 +102,12 @@ class PiCLIProvider:
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip()
             raise RuntimeError(f"pi CLI failed with exit code {proc.returncode}\n{detail}")
+        if not proc.stdout.strip():
+            # Print mode exits 0 even when the run produced no assistant text
+            # (for example, only tool calls). Surface it instead of returning
+            # an empty completion that silently parses as UNKNOWN downstream.
+            detail = proc.stderr.strip() or "no diagnostics"
+            raise RuntimeError(f"pi CLI returned no output\n{detail}")
         return proc.stdout
 
     @staticmethod

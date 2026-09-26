@@ -118,6 +118,16 @@ def test_cli_failures_preserve_diagnostics(monkeypatch: pytest.MonkeyPatch, fail
         assert "診断" in str(excinfo.value)
 
 
+def test_empty_output_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def invoke(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, "", "session produced no assistant text")
+
+    monkeypatch.setattr("re_agent.llm.pi_cli.subprocess.run", invoke)
+    with pytest.raises(RuntimeError, match="returned no output") as excinfo:
+        PiCLIProvider().send([Message(role="user", content="test")])
+    assert "no assistant text" in str(excinfo.value)
+
+
 def test_unknown_conversation_id_raises() -> None:
     with pytest.raises(KeyError, match="Unknown conversation ID"):
         PiCLIProvider().resume("missing", "request")
