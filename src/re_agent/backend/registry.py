@@ -11,6 +11,8 @@ def create_backend(config: BackendConfig) -> REBackend:
 
     Supported types:
         - ``"ghidra-bridge"`` (default): Shells out to a Ghidra CLI tool.
+        - ``"ghidra-json"``: Reads offline Ghidra exports from disk.
+        - ``"ida-mcp"``: Calls an ``ida-pro-mcp`` HTTP endpoint.
         - ``"stub"``: In-memory stub returning canned data (for testing).
 
     Raises:
@@ -26,6 +28,14 @@ def create_backend(config: BackendConfig) -> REBackend:
             timeout_s=config.timeout_s,
         )
 
+    if backend_type in ("ida-mcp", "ida"):
+        from re_agent.backend.ida_mcp import IdaMcpBackend
+
+        return IdaMcpBackend(
+            url=config.url,
+            timeout_s=config.timeout_s,
+        )
+
     if backend_type == "ghidra-json":
         from re_agent.backend.exports import GhidraExportsBackend
 
@@ -38,4 +48,7 @@ def create_backend(config: BackendConfig) -> REBackend:
 
         return StubBackend()
 
-    raise ValueError(f"Unknown backend type: {config.type!r}. Supported: ghidra-bridge, stub")
+    raise ValueError(
+        f"Unknown backend type: {config.type!r}. "
+        "Supported: ghidra-bridge, ghidra-json, ida-mcp, stub"
+    )

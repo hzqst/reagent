@@ -71,6 +71,45 @@ backend:
 The `ghidra-ai-bridge` package installs the `ghidra-bridge` executable. Prepare
 its exports separately before running reversal commands.
 
+### IDA backend
+
+```yaml
+backend:
+  type: ida-mcp
+  url: http://127.0.0.1:13337/mcp
+  timeout_s: 120
+```
+
+`ida-mcp` talks to a running [`ida-pro-mcp`](https://github.com/mrexodia/ida-pro-mcp)
+server over JSON-RPC instead of shelling out. The server exposes an open IDA
+database; no exports are needed. Only read-only evidence tools are used, so the
+IDB is never modified. `ida` is accepted as an alias for the type.
+
+`timeout_s` must exceed the IDA-side tool timeouts, which reach 90s for
+`decompile`/`disasm` and 120s for the composite analysis tools.
+
+Backend capabilities are probed from the server's `tools/list`, so tools
+disabled in the plugin's config page correctly report as unavailable. An
+unreachable server raises an error rather than reporting "no capabilities",
+which would let commands silently proceed with degraded evidence.
+
+Two behaviors are worth knowing:
+
+- **Addresses are re-prefixed.** re-agent normalizes addresses to bare hex
+  (`0041bef0`), but IDA's address parser rejects that form and requires a `0x`
+  prefix or a symbol name. Address-bearing arguments are converted
+  automatically; symbol names pass through untouched.
+- **Truncated output is re-fetched.** The server replaces structured output
+  larger than 50,000 characters with a preview plus a download URL. The backend
+  downloads the full payload; if that fails it raises rather than using the
+  preview.
+
+`has_structs` is derived from the `search_structs` tool, but `get_struct` reads
+the `ida://struct/{name}` MCP resource instead. A profile that omits
+`search_structs` (such as the upstream `readonly.txt`) therefore reports
+`has_structs: false` even though struct retrieval still works. No production
+call site consults this flag.
+
 ## Project Profile
 
 The `project_profile` section makes re-agent work across different RE projects.

@@ -502,7 +502,9 @@ cost depends on the selected models, evidence volume, and target complexity.
 
 `ghidra-ai-bridge` remains an independent analysis package with a versioned
 JSON/CLI evidence surface. auto-re-agent consumes it through a capability-based
-backend, leaving room for future IDA, Binary Ninja, or other backends.
+backend. The same interface carries an IDA backend (`backend.type: ida-mcp`,
+talking to an `ida-pro-mcp` server), and leaves room for Binary Ninja or other
+backends.
 
 ## Development
 

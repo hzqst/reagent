@@ -87,6 +87,7 @@ class BackendConfig:
     export_dir: str | None = None
     address_map: str | None = None
     cli_path: str = "ghidra-bridge"
+    url: str = "http://127.0.0.1:13337/mcp"
     timeout_s: int = 45
 
 
