@@ -25,6 +25,39 @@ REVERSED_TAG_RE = re.compile(r"REVERSED_FUNCTION:\s*(.+)")
 # ```json block never matches it.
 JSON_BLOCK_RE = re.compile(r"```json\s*\n(\{.*?\})\s*```", re.S)
 
+# Tools the model may request, mapped to the backend method that serves them.
+# Order is the order the prompt lists them in.
+_TOOL_METHODS: dict[str, str] = {
+    "decompile": "decompile",
+    "xrefs_from": "xrefs_from",
+    "xrefs_to": "xrefs_to",
+    "struct": "get_struct",
+    "enum": "get_enum",
+    "vtable": "get_vtable",
+    "global": "get_global",
+    "strings": "search_strings",
+    "context": "get_context",
+    "pcode": "get_pcode",
+    "cfg": "get_cfg",
+}
+
+# Which :class:`BackendCapabilities` flag gates each tool.  A tool is offered to
+# the model only when its flag is set, so backends that raise
+# ``NotImplementedError`` for an operation are never asked for it.
+_TOOL_CAPABILITIES: dict[str, str] = {
+    "decompile": "has_decompile",
+    "xrefs_from": "has_xrefs",
+    "xrefs_to": "has_xrefs",
+    "struct": "has_structs",
+    "enum": "has_enums",
+    "vtable": "has_vtables",
+    "global": "has_globals",
+    "strings": "has_strings",
+    "context": "has_context",
+    "pcode": "has_pcode",
+    "cfg": "has_cfg",
+}
+
 
 class ReverserAgent:
     """Gathers decompile context and asks the LLM to reverse a function."""
@@ -94,7 +127,7 @@ class ReverserAgent:
             except Exception:
                 structs_text = "Unavailable"
 
-        system_prompt = render_template(PROMPTS_DIR / "reverser_system.md")
+        system_prompt = self._system_prompt()
         source_context = ""
         if self._source_context_builder is not None:
             source_context = self._source_context_builder.build(target)
@@ -182,6 +215,21 @@ class ReverserAgent:
                 artifacts.append(f"## Persistent knowledge graph neighborhood\n{neighborhood}")
         return "\n\n".join(artifacts)
 
+    def _available_tools(self) -> list[str]:
+        """Tool names the configured backend can actually serve.
+
+        The prompt advertises exactly this set, so the model is never invited to
+        spend a request on a tool the backend does not implement.
+        """
+        caps = self.backend.capabilities
+        return [tool for tool, capability in _TOOL_CAPABILITIES.items() if getattr(caps, capability, False)]
+
+    def _system_prompt(self) -> str:
+        return render_template(
+            PROMPTS_DIR / "reverser_system.md",
+            available_tools=", ".join(f"`{tool}`" for tool in self._available_tools()),
+        )
+
     def _run_action_loop(
         self,
         response: str,
@@ -198,7 +246,11 @@ class ReverserAgent:
             Message(role="assistant", content=response),
         ]
         used = 0
-        while used < self._max_investigations:
+        # Rounds are bounded separately: a request for a tool that is not
+        # implemented is not charged, so ``used`` alone cannot end the loop.
+        rounds = 0
+        while used < self._max_investigations and rounds < self._max_investigations:
+            rounds += 1
             payload = self._extract_json(response)
             actions = payload.get("actions") if payload is not None else None
             if not isinstance(actions, list) or not actions:
@@ -211,14 +263,24 @@ class ReverserAgent:
                     continue
                 tool = str(action.get("tool", ""))
                 argument = str(action.get("target") or target.address)
-                results.append(self._execute_action(tool, argument))
-                used += 1
+                rendered, charged = self._execute_action(tool, argument)
+                results.append(rendered)
+                if charged:
+                    used += 1
             if not results:
                 break
+            if used >= self._max_investigations:
+                # The budget is spent, so another request could only answer with
+                # another evidence request -- a call whose reply is unusable.
+                break
+            remaining = self._max_investigations - used
             tool_message = (
                 "Read-only reverse-engineering tool results:\n\n"
                 + "\n\n".join(results)
-                + "\n\nNow return the final reversed function, or request more evidence within the remaining budget."
+                + f"\n\nEvidence requests used: {used} of {self._max_investigations} "
+                f"({remaining} remaining).\n"
+                + "Now return the final reversed function, or request more evidence "
+                "within the remaining budget."
             )
             self.last_prompt = tool_message
             if self._conversation_id:
@@ -233,28 +295,29 @@ class ReverserAgent:
             raise RuntimeError("Investigation budget exhausted before a code candidate was produced")
         return response
 
-    def _execute_action(self, tool: str, argument: str) -> str:
-        methods = {
-            "decompile": "decompile",
-            "xrefs_from": "xrefs_from",
-            "xrefs_to": "xrefs_to",
-            "struct": "get_struct",
-            "enum": "get_enum",
-            "vtable": "get_vtable",
-            "global": "get_global",
-            "strings": "search_strings",
-            "context": "get_context",
-            "pcode": "get_pcode",
-            "cfg": "get_cfg",
-        }
-        method_name = methods.get(tool)
-        method = getattr(self.backend, method_name, None) if method_name else None
+    def _execute_action(self, tool: str, argument: str) -> tuple[str, bool]:
+        """Run one requested action, returning ``(rendered_result, charged)``.
+
+        ``charged`` is False when nothing was queried -- an unknown tool, one the
+        backend does not implement, or a backend error -- so that such a request
+        does not consume the investigation budget without producing evidence.
+        """
+        method_name = _TOOL_METHODS.get(tool)
+        if method_name is None:
+            return f"TOOL {tool}({argument}): unavailable", False
+        if tool not in self._available_tools():
+            return (
+                f"TOOL {tool}({argument}): unavailable on this backend; "
+                f"available tools are {', '.join(self._available_tools())}",
+                False,
+            )
+        method = getattr(self.backend, method_name, None)
         if not callable(method):
-            return f"TOOL {tool}({argument}): unavailable"
+            return f"TOOL {tool}({argument}): unavailable", False
         try:
             value = method(argument)
         except Exception as exc:
-            return f"TOOL {tool}({argument}) ERROR: {exc}"
+            return f"TOOL {tool}({argument}) ERROR: {exc}", False
         if value is None:
             rendered = "not found"
         elif hasattr(value, "content"):
@@ -263,7 +326,7 @@ class ReverserAgent:
             rendered = str(value.raw_output)
         else:
             rendered = repr(value)
-        return f"TOOL {tool}({argument}):\n{bounded_evidence(rendered, 12000)}"
+        return f"TOOL {tool}({argument}):\n{bounded_evidence(rendered, 12000)}", True
 
     def fix(
         self,
@@ -299,7 +362,7 @@ class ReverserAgent:
             self._history.append(Message(role="assistant", content=response))
 
         self.last_response = response
-        system_prompt = render_template(PROMPTS_DIR / "reverser_system.md")
+        system_prompt = self._system_prompt()
         response = self._run_action_loop(response, target, system_prompt, fix_prompt)
         self.last_response = response
         code = self._extract_code(response)
