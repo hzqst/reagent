@@ -94,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Permit struct member changes, which modify a shared type",
     )
     ann_p.add_argument(
+        "--allow-prototype-changes",
+        action="store_true",
+        help="Permit reviewed void-pointer refinements that preserve the function ABI",
+    )
+    ann_p.add_argument(
         "--save", action="store_true", help="Save the IDA database after writing"
     )
 

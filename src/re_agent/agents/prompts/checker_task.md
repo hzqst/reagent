@@ -15,4 +15,7 @@ ${decompiled}
 **Proposed symbol (validate it; do not rewrite the code to fit it):**
 ${proposed_symbol}
 
+**Source/header evidence collected by the harness (verify address and version correspondence):**
+${source_context}
+
 Check every line, offset, call, branch, and expression order. Return only the JSON object required by the system prompt.

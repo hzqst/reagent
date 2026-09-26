@@ -110,15 +110,18 @@ class ReverserAgent:
         self._knowledge_graph = KnowledgeGraph(report_dir / "knowledge-graph.json") if report_dir is not None else None
         self.last_prompt: str = ""
         self.last_response: str = ""
+        self.last_source_context: str = ""
         # Symbol proposal parsed from the most recent response, if the model
         # offered one.  Kept as instance state so the ``(code, tag)`` signatures
         # of ``reverse``/``fix`` stay unchanged.
         self.last_symbol: SymbolProposal | None = None
+        self._original_signature = ""
 
     def reverse(self, target: FunctionTarget) -> tuple[str, str]:
         """Reverse a function. Returns (code, reversed_function_tag)."""
         # Gather context
         decompile_result = self.backend.decompile(target.address)
+        self._original_signature = getattr(decompile_result, "signature", "")
         decompiled = decompile_result.raw_output
 
         caps = self.backend.capabilities
@@ -147,6 +150,7 @@ class ReverserAgent:
         source_context = ""
         if self._source_context_builder is not None:
             source_context = self._source_context_builder.build(target)
+        self.last_source_context = source_context
         investigation_context = self._build_investigation_context(target)
         task_prompt = render_template(
             PROMPTS_DIR / "reverser_task.md",
@@ -187,7 +191,16 @@ class ReverserAgent:
         code = self._extract_code(response)
         tag = self._extract_tag(response)
         self.last_symbol = self._extract_symbol(response)
+        self._bind_prototype()
         return code, tag
+
+    def _bind_prototype(self) -> None:
+        """Bind the original backend snapshot; never trust model review fields."""
+        if self.last_symbol is not None and self.last_symbol.prototype is not None:
+            proposal = self.last_symbol.prototype
+            proposal.expected_current = self._original_signature
+            proposal.review_status = "unreviewed"
+            proposal.review_notes = []
 
     def _project_rules(self) -> str:
         if self._project_profile is None:
@@ -384,6 +397,7 @@ class ReverserAgent:
         code = self._extract_code(response)
         tag = self._extract_tag(response)
         self.last_symbol = self._extract_symbol(response)
+        self._bind_prototype()
         return code, tag
 
     @staticmethod

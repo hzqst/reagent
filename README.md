@@ -398,8 +398,83 @@ Global options must precede the subcommand, for example
 | `re-agent status --class CLASS --format text` | Show session progress |
 | `re-agent estimate --address ADDR` | Estimate one function |
 | `re-agent estimate --class CLASS --limit N` | Estimate a class batch |
+| `re-agent annotate --symbols symbols.json` | Preview IDA name/comment proposals |
+| `re-agent annotate --symbols symbols.json --allow-prototype-changes --write --save` | Apply reviewed function type refinements and save the IDB |
 
 Use `re-agent <command> --help` for the exact option list.
+
+## Apply function prototype proposals in IDA
+
+`reverse` can attach an optional `prototype` to each symbol in
+`report_dir/symbols.json`. Existing name/comment-only files remain supported.
+The prototype has its own evidence, confidence and independent checker review;
+a verified name does not approve a function type. The harness captures
+`expected_current` from the backend and resets the review on every reversal/fix
+response. An absent, malformed or mismatched checker review never grants approval.
+
+An example of a **reviewed artifact** (evidence must reference actual inputs):
+
+```json
+{
+  "schema_version": 1,
+  "symbols": [{
+    "address": "0x4A3890",
+    "name": "FileClass::ReadWholeFile_4A3890",
+    "prototype": {
+      "declaration": "void *__thiscall FileClass::ReadWholeFile_4A3890(FileClass *this);",
+      "expected_current": "void *__thiscall(void *this)",
+      "required_types": ["FileClass"],
+      "confidence": "verified",
+      "evidence": ["matching-version header declaration/address and binary ABI evidence"],
+      "review_status": "approved",
+      "review_notes": ["independent checker evidence references"]
+    }
+  }]
+}
+```
+
+Preview first, then explicitly enable writes:
+
+```sh
+re-agent annotate --symbols symbols.json --allow-prototype-changes
+re-agent annotate --symbols symbols.json --allow-prototype-changes --write --save
+```
+
+The first version supports qualifier-preserving `void *` to existing complete
+named struct/class pointer refinements. IDA must parse one plain prototype with
+an explicit `__cdecl`, `__stdcall`, `__fastcall` or `__thiscall` convention.
+Return types, function/argument flags, parameter counts, and ABI locations must
+remain unchanged. Complex declarators, varargs, hidden-parameter changes and
+custom calling conventions are rejected. Types are never created or imported.
+The connected IDA server must expose `py_eval`; fixed IDAPython helpers perform
+read-only preflight and a guarded native type application. Proposal strings are
+passed as data, never as Python code. Unsupported helpers fail closed.
+
+Dry run reports current/proposed types without applying types, comments, names,
+or saving. Write mode pins the target to an exact function entry before renaming,
+checks the original type again immediately before application, and independently
+reads both the stored type and fresh decompilation afterwards. Stale proposals
+are rejected; already equivalent types are reported as `unchanged`. `--save`
+only reports success when IDA confirms the save.
+
+`--only-unnamed` skips the entire entry, including its type, when the function is
+already named. Omit it when refining an already named function.
+`--include-flagged` cannot override a disputed/unreviewed prototype. Shared struct
+changes and prototype changes require separate invocations and fresh proposals.
+
+Reports contain separate name, comment and prototype outcomes: a rejected type
+does not prevent otherwise eligible name/comment changes. Invalid types, failed
+writes/readbacks, and failed saves produce a nonzero exit status. On an ambiguous
+write failure (including a timeout), recovery reads the actual state before
+attempting to restore the original explicit/inferred type state. If recovery
+cannot be confirmed, further prototype writes and automatic saving stop. This
+is not a transaction across the entire annotation batch; inspect the report for
+partial changes. Changing the target prototype can affect caller decompilation.
+
+For live acceptance, use a disposable IDB with an existing class type and a
+`void *this` function: preview, apply, independently query/decompile the target,
+then save and reopen the IDB to check persistence. The mocked tests exercise the
+pipeline and failures but do not replace that integration check.
 
 ## Working with function groups
 

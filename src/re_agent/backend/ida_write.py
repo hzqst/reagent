@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from re_agent.backend.ida_mcp import as_list, ida_target, post_jsonrpc, recover_truncated
+from re_agent.backend.ida_prototype import prototype_result, prototype_script
 from re_agent.core.models import StructChange
 
 # Function names IDA generates for symbols it has not identified.  Used to keep
@@ -139,6 +140,15 @@ class IdaWriteClient:
         return recover_truncated(tool, result, self._timeout_s)
 
     # -- reads ----------------------------------------------------------------
+
+    def prototype_operation(self, mode: str, address: str, **parameters: Any) -> dict[str, Any]:
+        """Run a fixed helper; unsupported servers fail closed without writes.
+
+        Apply includes its own snapshot check in the same IDA operation, avoiding
+        a check/set race. No model-authored Python is executed.
+        """
+        request = {**parameters, "mode": mode, "address": ida_target(address)}
+        return prototype_result(self._call("py_eval", {"code": prototype_script(request)}))
 
     def function_names(self, addresses: list[str]) -> dict[str, str]:
         """Return the current name of each target, where IDA knows it.
@@ -275,7 +285,10 @@ class IdaWriteClient:
 
     def save(self) -> Any:
         """Persist the database to disk."""
-        return self._call("idb_save", {})
+        result = self._call("idb_save", {})
+        if not isinstance(result, dict) or result.get("error") or result.get("ok") is not True:
+            raise RuntimeError(f"IDA did not confirm saving the database: {result}")
+        return result
 
 
 def apply_member_change(

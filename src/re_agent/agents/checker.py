@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,8 @@ def _render_symbol(symbol: SymbolProposal | None) -> str:
         lines.append(f"comment: {symbol.comment}")
     if symbol.evidence:
         lines.append("evidence: " + "; ".join(symbol.evidence))
+    if symbol.prototype is not None:
+        lines.append("prototype: " + json.dumps(asdict(symbol.prototype)))
     for change in symbol.struct_changes:
         lines.append(
             f"struct_change: {change.struct_name}.{change.member} {change.operation} "
@@ -125,6 +128,8 @@ class CheckerAgent:
         code: str,
         target: FunctionTarget,
         symbol: SymbolProposal | None = None,
+        *,
+        source_context: str = "",
     ) -> CheckerVerdict:
         """Check reversed code against decompilation. Returns CheckerVerdict.
 
@@ -132,6 +137,7 @@ class CheckerAgent:
             code: The reversed candidate.
             target: The function being reversed.
             symbol: Optional proposed symbol, validated alongside the code.
+            source_context: Harness-collected header/source evidence, not model claims.
         """
         decompile_result = self.backend.decompile(target.address)
         decompiled = decompile_result.raw_output
@@ -145,6 +151,7 @@ class CheckerAgent:
             reversed_code=code,
             decompiled=decompiled,
             proposed_symbol=_render_symbol(symbol),
+            source_context=source_context or "Unavailable; do not approve unsupported header claims.",
         )
 
         from re_agent.agents.reverser import ReverserAgent
@@ -236,6 +243,16 @@ class CheckerAgent:
         issues = payload.get("issues", [])
         fixes = payload.get("fix_instructions", [])
         symbol_issues = payload.get("symbol_issues", [])
+        review = payload.get("prototype_review")
+        review = review if isinstance(review, dict) else {}
+        status = review.get("status", "unreviewed")
+        declaration = review.get("declaration", "")
+        notes = review.get("notes", [])
+        valid_review = (
+            isinstance(status, str) and isinstance(declaration, str) and bool(declaration.strip())
+            and isinstance(notes, list) and all(isinstance(note, str) for note in notes)
+            and verdict != Verdict.UNKNOWN
+        )
         return CheckerVerdict(
             verdict=verdict,
             summary=str(payload.get("summary", "")),
@@ -244,4 +261,7 @@ class CheckerAgent:
             symbol_issues=(
                 [str(item) for item in symbol_issues] if isinstance(symbol_issues, list) else []
             ),
+            prototype_review=status if valid_review and status in {"approved", "disputed"} else "unreviewed",
+            prototype_declaration=declaration if isinstance(declaration, str) else "",
+            prototype_notes=notes if valid_review else [],
         )
