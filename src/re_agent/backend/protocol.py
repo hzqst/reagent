@@ -35,6 +35,7 @@ class BackendCapabilities:
     has_strings: bool = False
     has_pcode: bool = False
     has_cfg: bool = False
+    has_function_types: bool = False
 
 
 @runtime_checkable

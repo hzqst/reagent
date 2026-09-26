@@ -63,6 +63,9 @@ class CheckerVerdict:
     issues: list[str] = field(default_factory=list)
     fix_instructions: list[str] = field(default_factory=list)
     symbol_issues: list[str] = field(default_factory=list)
+    prototype_review: str = "unreviewed"
+    prototype_declaration: str = ""
+    prototype_notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -136,6 +139,50 @@ class StructChange:
 
 
 @dataclass
+class FunctionPrototypeProposal:
+    """An independently reviewed, optional function type refinement.
+
+    Malformed proposals remain visible through ``validation_error`` rather
+    than disappearing as if no type change had been requested.
+    """
+
+    declaration: str = ""
+    expected_current: str = ""
+    required_types: list[str] = field(default_factory=list)
+    confidence: str = "inferred"
+    evidence: list[str] = field(default_factory=list)
+    review_status: str = "unreviewed"
+    review_notes: list[str] = field(default_factory=list)
+    validation_error: str = ""
+
+    @classmethod
+    def from_dict(cls, data: object) -> FunctionPrototypeProposal:
+        if not isinstance(data, dict):
+            return cls(validation_error="prototype must be an object")
+        for key in ("declaration", "expected_current", "confidence", "review_status", "validation_error"):
+            if key in data and not isinstance(data[key], str):
+                return cls(validation_error=f"prototype.{key} must be a string")
+        for key in ("required_types", "evidence", "review_notes"):
+            if key in data and (
+                not isinstance(data[key], list)
+                or any(not isinstance(item, str) or not item.strip() for item in data[key])
+            ):
+                return cls(validation_error=f"prototype.{key} must be a list of non-empty strings")
+        declaration = str(data.get("declaration", "")).strip()
+        status = data.get("review_status", "unreviewed")
+        return cls(
+            declaration=declaration,
+            expected_current=str(data.get("expected_current", "")).strip(),
+            required_types=_string_list(data.get("required_types")),
+            confidence=_confidence(data.get("confidence")),
+            evidence=_string_list(data.get("evidence")),
+            review_status=status if status in {"approved", "disputed"} else "unreviewed",
+            review_notes=_string_list(data.get("review_notes")),
+            validation_error=str(data.get("validation_error") or ("" if declaration else "Missing declaration")),
+        )
+
+
+@dataclass
 class SymbolProposal:
     """A proposed name and comment for a function in the analysis database.
 
@@ -150,6 +197,7 @@ class SymbolProposal:
     struct_changes: list[StructChange] = field(default_factory=list)
     checker_ok: bool = True
     checker_notes: list[str] = field(default_factory=list)
+    prototype: FunctionPrototypeProposal | None = None
 
     @classmethod
     def from_dict(cls, data: object) -> SymbolProposal | None:
@@ -171,6 +219,10 @@ class SymbolProposal:
             struct_changes=changes,
             checker_ok=bool(data.get("checker_ok", True)),
             checker_notes=_string_list(data.get("checker_notes")),
+            prototype=(
+                FunctionPrototypeProposal.from_dict(data["prototype"])
+                if data.get("prototype") is not None else None
+            ),
         )
 
 
@@ -208,6 +260,7 @@ class DecompileResult:
     raw_output: str
     callers: int | None = None
     callees: int | None = None
+    signature_source: str = ""
 
 
 @dataclass

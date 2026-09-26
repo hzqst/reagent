@@ -25,6 +25,12 @@ Output format:
   "comment": "one or two lines: what it does, and the evidence it rests on",
   "confidence": "inferred",
   "evidence": ["specific address, offset, call site, or header annotation"],
+  "prototype": {
+    "declaration": "void *__thiscall ClassName::ProposedName(ClassName *this);",
+    "required_types": ["ClassName"],
+    "confidence": "verified",
+    "evidence": ["matching-version header declaration and address; binary evidence for this and ABI"]
+  },
   "struct_changes": [
     {"struct": "TechnoClass", "member": "Audio4", "operation": "move",
      "offset": "0x4A4", "type": "AudioController",
@@ -39,3 +45,14 @@ source states the name; use `"inferred"` when you derived it from behavior.
 position contradicts what the code actually does — report the raw offset and
 the instruction that proves it. Omit the whole json block rather than guessing:
 an absent proposal is better than an invented name.
+
+`prototype` is optional and has its OWN evidence and confidence. A verified name
+does not verify its prototype. Propose only a qualifier-preserving `void *` to
+an existing, complete named struct/class pointer refinement. Preserve the return
+type, calling convention, argument count, argument locations and all other types.
+Use an explicit calling convention and explicit binary parameters (including
+`this`); a C++ member declaration with implicit `this` is insufficient. Cite the
+matching header/address and binary ABI evidence. Omit the proposal when types,
+hidden parameters, calling convention, or evidence are unresolved or disputed.
+Do not emit expected_current or review fields: the harness supplies the original
+backend snapshot and an independent checker reviews each final proposal.

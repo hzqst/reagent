@@ -260,6 +260,7 @@ class IdaMcpBackend:
             has_cfg="basic_blocks" in names,
             has_globals="list_globals" in names,
             has_strings="find_regex" in names,
+            has_function_types="py_eval" in names,
         )
 
     # -- decompile ------------------------------------------------------------
@@ -274,10 +275,23 @@ class IdaMcpBackend:
 
         code = payload.get("code") or ""
         name = self._function_name(target) or target
+        signature, signature_source = "", ""
+        if self.capabilities.has_function_types:
+            from re_agent.backend.ida_prototype import prototype_result, prototype_script
+
+            try:
+                state = prototype_result(self._call("py_eval", {"code": prototype_script({
+                    "mode": "read", "address": ida_target(target),
+                })}))["current"]
+                signature, signature_source = state["declaration"], state["source"]
+                payload = {**payload, "signature": signature, "signature_source": signature_source}
+            except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
+                payload = {**payload, "signature_error": str(exc)}
         return DecompileResult(
             address=str(payload.get("addr") or target),
             name=name,
-            signature="",
+            signature=signature,
+            signature_source=signature_source,
             decompiled=code,
             raw_output=json.dumps(payload),
             callers=None,

@@ -1,9 +1,12 @@
 """Tests for the ida-pro-mcp backend; no IDA instance or network required."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from re_agent.backend.ida_mcp import IdaMcpBackend
+from re_agent.backend.ida_prototype import PROTOTYPE_MARKER
 from re_agent.backend.protocol import REBackend
 from re_agent.backend.registry import create_backend
 from re_agent.config.schema import BackendConfig
@@ -51,6 +54,30 @@ def _plain_decompile(code="x"):
         "lookup_funcs": _ok({"result": []}),
         "callees": _ok({"result": []}),
     }
+
+
+def test_structured_signature_reaches_the_model_evidence(monkeypatch):
+    responses = _plain_decompile()
+    responses["__tools__"] = ["py_eval", "decompile"]
+    responses["py_eval"] = _ok({"stdout": PROTOTYPE_MARKER + json.dumps({
+        "ok": True, "current": {"declaration": "void *__thiscall(void *this)", "source": "database"},
+    })})
+    _backend(monkeypatch, responses)
+    result = IdaMcpBackend().decompile("0x1")
+    assert result.signature == "void *__thiscall(void *this)"
+    assert result.signature_source == "database"
+    assert json.loads(result.raw_output)["signature"] == result.signature
+
+
+def test_unavailable_type_reader_preserves_decompile_with_explicit_gap(monkeypatch):
+    responses = _plain_decompile("body")
+    responses["__tools__"] = ["py_eval", "decompile"]
+    responses["py_eval"] = RuntimeError("unavailable")
+    _backend(monkeypatch, responses)
+    result = IdaMcpBackend().decompile("0x1")
+    assert result.decompiled == "body"
+    assert result.signature == ""
+    assert "unavailable" in json.loads(result.raw_output)["signature_error"]
 
 
 def test_is_re_backend():

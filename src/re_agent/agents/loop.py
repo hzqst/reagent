@@ -107,7 +107,7 @@ def run_fix_loop(
             assert last_verdict is not None
             code, _ = reverser.fix(
                 checker_report=last_verdict.summary,
-                issues=[*last_verdict.issues, *last_verdict.symbol_issues, *gate_issues],
+                issues=[*last_verdict.issues, *last_verdict.symbol_issues, *last_verdict.prototype_notes, *gate_issues],
                 fix_instructions=last_verdict.fix_instructions,
                 target=target,
                 objective_findings=last_objective_verdict.findings if last_objective_verdict else None,
@@ -129,7 +129,7 @@ def run_fix_loop(
             log_path.write_text(json.dumps(log_entry, indent=2), encoding="utf-8")
 
         # Check
-        verdict = checker.check(code, target, reverser.last_symbol)
+        verdict = checker.check(code, target, reverser.last_symbol, source_context=reverser.last_source_context)
         last_verdict = verdict
 
         objective_verdict: ObjectiveVerdict | None = None
@@ -154,6 +154,8 @@ def run_fix_loop(
                 "summary": verdict.summary,
                 "issues": verdict.issues,
                 "fix_instructions": verdict.fix_instructions,
+                "prototype_review": verdict.prototype_review,
+                "prototype_notes": verdict.prototype_notes,
                 "objective_verdict": objective_verdict.verdict.value if objective_verdict else None,
                 "objective_summary": objective_verdict.summary if objective_verdict else "",
                 "objective_findings": objective_verdict.findings if objective_verdict else [],
@@ -166,6 +168,11 @@ def run_fix_loop(
         if symbol is not None:
             symbol.checker_ok = not verdict.symbol_issues
             symbol.checker_notes = list(verdict.symbol_issues)
+            if symbol.prototype is not None:
+                prototype = symbol.prototype
+                if verdict.prototype_declaration.strip() == prototype.declaration.strip():
+                    prototype.review_status = verdict.prototype_review
+                    prototype.review_notes = list(verdict.prototype_notes)
 
         result = ReversalResult(
             target=target,

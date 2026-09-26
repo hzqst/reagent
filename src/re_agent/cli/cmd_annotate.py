@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from re_agent.backend.ida_prototype import PrototypeOperationError
 from re_agent.backend.ida_write import (
     IdaWriteClient,
     address_key,
@@ -40,9 +41,15 @@ class _Entry:
     action: str = "apply"
     notes: list[str] = field(default_factory=list)
     struct_reports: list[dict[str, object]] = field(default_factory=list)
+    prototype_report: dict[str, Any] = field(default_factory=dict)
+    prototype_plan: dict[str, Any] = field(default_factory=dict)
+    name_status: str = "pending"
+    comment_status: str = "pending"
 
 
 def cmd_annotate(args: argparse.Namespace) -> int:
+    if args.allow_prototype_changes and args.allow_struct_changes:
+        raise ValueError("Apply prototype and shared struct changes in separate invocations, with fresh proposals")
     config = load_config(Path(args.config))
     backend_type = config.backend.type.lower().replace("_", "-")
     if backend_type not in WRITE_BACKENDS:
@@ -60,33 +67,142 @@ def cmd_annotate(args: argparse.Namespace) -> int:
     names = client.function_names([entry.address for entry in entries])
 
     _decide(entries, names, only_unnamed=args.only_unnamed, include_flagged=args.include_flagged)
+    for entry in entries:
+        entry.name_status = "pending" if entry.action == "apply" else entry.action
+        entry.comment_status = (
+            entry.action if entry.action != "apply" else
+            "would-apply" if entry.proposal.comment else "absent"
+        )
+        _plan_prototype(client, entry, allowed=args.allow_prototype_changes)
 
     # Comments go first: a proposal may be addressed by a symbol name, and
     # renaming replaces that name, leaving the old one unresolvable.
     if args.write:
         for entry in entries:
             if entry.action == "apply" and entry.proposal.comment:
-                client.append_function_comment(entry.address, _comment_text(entry.proposal))
+                try:
+                    client.append_function_comment(entry.address, _comment_text(entry.proposal))
+                    entry.comment_status = "applied"
+                except (RuntimeError, OSError, ValueError) as exc:
+                    entry.comment_status = "failed"
+                    entry.notes.append(str(exc))
 
     renames = [(e.address, e.proposal.name) for e in entries if e.action == "apply"]
-    results = client.rename_functions(
-        renames, dry_run=not args.write, allow_overwrite=False
-    )
-    for entry, result in zip([e for e in entries if e.action == "apply"], results, strict=False):
-        if isinstance(result, dict) and result.get("error"):
+    try:
+        results = client.rename_functions(renames, dry_run=not args.write, allow_overwrite=False)
+    except (RuntimeError, OSError, ValueError) as exc:
+        results = [{"error": str(exc)} for _ in renames]
+    for index, entry in enumerate([e for e in entries if e.action == "apply"]):
+        result = results[index] if index < len(results) else {"error": "IDA returned no rename result"}
+        if result.get("error") or result.get("ok") is False:
             entry.action = "error"
-            entry.notes.append(str(result["error"]))
+            entry.name_status = "failed"
+            entry.notes.append(str(result.get("error") or "IDA rejected the rename"))
+        else:
+            entry.name_status = "applied" if args.write else "would-apply"
 
+    saved = False
+    save_error = ""
     if args.write:
+        recovery_failed = False
+        for entry in entries:
+            if entry.prototype_report.get("status") == "would-apply":
+                if recovery_failed:
+                    entry.prototype_report.update(status="not-attempted", reason="An earlier type recovery failed")
+                    continue
+                # Address and original type were fixed before renaming.
+                _apply_prototype(client, entry)
+                recovery_failed = entry.prototype_report.get("status") == "recovery-failed"
         if args.allow_struct_changes:
             for entry in entries:
                 if entry.action == "apply":
                     entry.struct_reports = _apply_struct_changes(client, entry)
         if args.save:
-            client.save()
+            if any(e.prototype_report.get("status") == "recovery-failed" for e in entries):
+                save_error = "Save suppressed: a function type could not be restored"
+            else:
+                try:
+                    client.save()
+                    saved = True
+                except (RuntimeError, OSError, ValueError) as exc:
+                    save_error = str(exc)
 
-    _report(entries, write=args.write, saved=args.save)
-    return 0 if all(e.action in {"apply", "skip-named", "skip-flagged"} for e in entries) else 1
+    _report(entries, write=args.write, saved=saved, save_error=save_error)
+    failed = any(
+        e.action not in {"apply", "skip-named", "skip-flagged"}
+        or e.comment_status == "failed"
+        or e.prototype_report.get("status") in {"invalid-prototype", "rejected", "reverted", "recovery-failed"}
+        for e in entries
+    )
+    return 1 if failed or save_error else 0
+
+
+def _plan_prototype(client: IdaWriteClient, entry: _Entry, *, allowed: bool) -> None:
+    prototype = entry.proposal.prototype
+    if prototype is None:
+        return
+    report = entry.prototype_report
+    report.update(proposed=prototype.declaration, current=None, status="pending")
+    if entry.action != "apply":
+        report.update(status=entry.action)
+        return
+    if prototype.validation_error:
+        report.update(status="invalid-prototype", reason=prototype.validation_error)
+        return
+    try:
+        state = client.prototype_operation("read", entry.address)["current"]
+        report.update(current=state["declaration"], address=state["address"], source=state["source"])
+        if not allowed:
+            report.update(status="disabled", reason="Requires --allow-prototype-changes")
+            return
+        if prototype.review_status != "approved" or not entry.proposal.checker_ok:
+            report.update(status="skip-unreviewed", reason="Prototype needs independent approval without disputes")
+            return
+        if prototype.confidence != "verified" or not prototype.evidence:
+            report.update(status="skip-unverified", reason="Prototype requires deterministic evidence")
+            return
+        if not prototype.expected_current:
+            raise ValueError("Missing original function type snapshot; regenerate the proposal")
+        plan = client.prototype_operation(
+            "plan", state["address"], declaration=prototype.declaration,
+            expected_current=prototype.expected_current, required_types=prototype.required_types,
+        )
+        entry.prototype_plan = plan
+        report.update(
+            current=plan["current"]["declaration"], proposed=plan["proposed"],
+            status="unchanged" if plan["unchanged"] else "would-apply",
+        )
+    except (RuntimeError, OSError, ValueError, KeyError) as exc:
+        report.update(status="rejected", reason=str(exc))
+
+
+def _apply_prototype(client: IdaWriteClient, entry: _Entry) -> None:
+    plan = entry.prototype_plan
+    original = plan["current"]
+    address = original["address"]
+    report = entry.prototype_report
+    verifying = False
+    try:
+        client.prototype_operation(
+            "apply", address, original=original, declaration=plan["proposed"], proposed_key=plan["proposed_key"],
+        )
+        verifying = True
+        verified = client.prototype_operation("verify", address, proposed_key=plan["proposed_key"])
+        report.update(status="applied", after=verified["current"]["declaration"], verified=True)
+    except (RuntimeError, OSError, ValueError, KeyError) as exc:
+        report.update(reason=str(exc), verified=False)
+        if isinstance(exc, PrototypeOperationError) and not exc.write_attempted and not verifying:
+            report.update(status="rejected")
+            return
+        # An HTTP error can arrive after IDA applied the type. Never retry the
+        # write blindly; recovery reads the actual state and guards restoration.
+        try:
+            client.prototype_operation(
+                "restore", address, original=original, proposed_key=plan["proposed_key"],
+            )
+            report.update(status="reverted")
+        except (RuntimeError, OSError, ValueError, KeyError) as recovery:
+            report.update(status="recovery-failed", recovery_error=str(recovery))
 
 
 # -- collecting proposals -----------------------------------------------------
@@ -288,10 +404,11 @@ def _same_offset(actual: str, expected: str) -> bool:
 # -- reporting ----------------------------------------------------------------
 
 
-def _report(entries: list[_Entry], *, write: bool, saved: bool) -> None:
+def _report(entries: list[_Entry], *, write: bool, saved: bool, save_error: str = "") -> None:
     payload = {
         "mode": "write" if write else "dry-run",
         "saved": saved,
+        "save_error": save_error or None,
         "undo": [
             {"address": entry.address, "current_name": entry.current_name, "new_name": entry.proposal.name}
             for entry in entries
@@ -305,6 +422,9 @@ def _report(entries: list[_Entry], *, write: bool, saved: bool) -> None:
                 "action": entry.action,
                 "notes": entry.notes,
                 "struct_changes": entry.struct_reports,
+                "prototype": entry.prototype_report or None,
+                "name_status": entry.name_status,
+                "comment_status": entry.comment_status,
             }
             for entry in entries
         ],
