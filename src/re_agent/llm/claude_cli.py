@@ -9,6 +9,11 @@ from typing import Any
 
 from re_agent.llm.protocol import Message
 
+# Project memory files Claude Code would otherwise load on its own.  A runner
+# prompt replaces them, so they are excluded explicitly rather than left to a
+# version-specific discovery rule.
+_MEMORY_EXCLUDES = (".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md")
+
 
 @dataclass
 class _Conversation:
@@ -36,12 +41,14 @@ class ClaudeCLIProvider:
         claude_bin: str = "claude",
         max_budget_usd: float | None = None,
         effort: str | None = None,
+        runner_prompt_file: str | None = None,
     ) -> None:
         self._model = model
         self._timeout_s = timeout_s
         self._claude_bin = claude_bin
         self._max_budget_usd = max_budget_usd
         self._effort = effort
+        self._runner_prompt_file = runner_prompt_file
         self._conversations: dict[str, _Conversation] = {}
         self.last_metadata = ClaudeCLIMetadata()
 
@@ -96,8 +103,16 @@ class ClaudeCLIProvider:
             "--model",
             str(model or self._model),
         ]
+        if self._runner_prompt_file is not None:
+            # Memory is re-discovered on every process start, so the exclusion
+            # has to ride along on each invocation, --resume included.
+            cmd.extend(
+                ["--settings", json.dumps({"claudeMdExcludes": list(_MEMORY_EXCLUDES)})]
+            )
         if system is not None:
             cmd.extend(["--system-prompt", system])
+            if self._runner_prompt_file is not None:
+                cmd.extend(["--append-system-prompt-file", self._runner_prompt_file])
         if session_id is not None:
             cmd.extend(["--session-id", session_id])
         if resume is not None:

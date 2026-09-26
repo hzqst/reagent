@@ -17,6 +17,7 @@ Supported CLI overrides > supported environment variables > YAML config > defaul
 | `RE_AGENT_LLM_BASE_URL` | `llm.base_url` |
 | `RE_AGENT_BACKEND_CLI_PATH` | `backend.cli_path` |
 | `RE_AGENT_BACKEND_TIMEOUT` | `backend.timeout_s` |
+| `RE_AGENT_LLM_RUNNER_PROMPT_FILE` | `llm.runner_prompt_file` |
 
 ## LLM Config
 
@@ -29,6 +30,8 @@ llm:
   max_tokens: 4096
   temperature: 0.0
   timeout_s: 1800
+  runner_prompt_file: null   # project prompt for the CLI providers
+  pi_tools: null             # Pi only: tool allowlist ("" disables every tool)
   input_cost_per_million: 0.0
   output_cost_per_million: 0.0
 ```
@@ -43,6 +46,29 @@ Notes:
 - `pi` uses the local [Pi coding agent](https://pi.dev) CLI and its existing
   login/configuration. `cli_path` is optional; `effort` maps to Pi's `--thinking`
   level. An empty or unchanged `model` defers to Pi's own configured default.
+
+CLI providers run from the project directory, so the harness would otherwise
+inject that project's own prompt (`AGENTS.md` / `CLAUDE.md`) into every
+reverser and checker call. `runner_prompt_file` replaces it with a prompt meant
+for the sub-role:
+
+```yaml
+llm:
+  provider: pi
+  runner_prompt_file: .claude/SKILL_RUNNER.md
+  pi_tools: "read,grep,ls"
+```
+
+- The path is resolved against the working directory and must exist.
+- The harness's own discovery is suppressed: Claude Code memory through
+  `--settings`/`claudeMdExcludes`, codex's project `AGENTS.md` through
+  `-c project_doc_max_bytes=0`, Pi's context files through `--no-context-files`.
+- The file is injected as the role's system prompt: `--append-system-prompt-file`
+  (claude-cli), `-c developer_instructions=` (codex), `--append-system-prompt`
+  (pi). Codex still loads its global `$CODEX_HOME/AGENTS.md`.
+- `pi_tools` narrows Pi's toolset through `--tools`; the allowlist covers
+  built-in, extension and custom tools alike, so `"read,grep,ls"` leaves the
+  MCP adapter unreachable. An empty string instead passes `--no-tools`.
 
 Independent role overrides inherit the top-level `llm` block only when the
 role is omitted:

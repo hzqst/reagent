@@ -1,6 +1,10 @@
 """Tests for LLM protocol and provider basics."""
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from re_agent.config.schema import LLMConfig
 from re_agent.llm.protocol import LLMProvider, Message
 from re_agent.llm.registry import create_provider
@@ -63,3 +67,24 @@ def test_registry_defers_pi_default_model() -> None:
     assert getattr(create_provider(LLMConfig(provider="pi")), "_model", None) == ""
     explicit = create_provider(LLMConfig(provider="pi", model="sonnet:high"))
     assert getattr(explicit, "_model", None) == "sonnet:high"
+
+
+def test_registry_rejects_missing_runner_prompt_file() -> None:
+    with pytest.raises(ValueError, match="runner_prompt_file not found"):
+        create_provider(LLMConfig(provider="pi", model="", runner_prompt_file=".claude/NOPE.md"))
+
+
+def test_registry_accepts_existing_runner_prompt_file(tmp_path: Path) -> None:
+    prompt = tmp_path / "SKILL_RUNNER.md"
+    prompt.write_text("runner conventions", encoding="utf-8")
+    provider = create_provider(LLMConfig(provider="pi", model="", runner_prompt_file=str(prompt)))
+    assert provider.supports_conversations
+
+
+def test_registry_ignores_runner_prompt_file_for_sdk_provider() -> None:
+    # SDK providers never read the file, so a stale path is not their error and
+    # must not block a command that uses one.
+    provider = create_provider(
+        LLMConfig(provider="claude", api_key="key", runner_prompt_file=".claude/NOPE.md")
+    )
+    assert provider.supports_conversations

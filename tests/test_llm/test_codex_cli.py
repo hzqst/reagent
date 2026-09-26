@@ -1,6 +1,7 @@
 """Codex transport regression tests; no account or model calls required."""
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -58,3 +59,74 @@ def test_cli_failures_preserve_diagnostics_and_clean_output(monkeypatch, failure
     with pytest.raises(RuntimeError, match=match[failure]):
         CodexCLIProvider(timeout_s=7).send([Message(role="user", content="test")])
     assert all(not path.exists() for path in output_paths)
+
+
+def _write_output(args, text="ok"):
+    Path(args[args.index("--output-last-message") + 1]).write_text(text, encoding="utf-8")
+
+
+def test_runner_prompt_file_suppresses_project_doc(tmp_path, monkeypatch):
+    runner_prompt = tmp_path / "SKILL_RUNNER.md"
+    runner_prompt.write_text('line one\nline two "quoted"', encoding="utf-8")
+    calls = []
+
+    def invoke(args, **kwargs):
+        calls.append(list(args))
+        _write_output(args)
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    CodexCLIProvider(runner_prompt_file=str(runner_prompt)).send(
+        [Message(role="user", content="x")]
+    )
+
+    args = calls[0]
+    assert "project_doc_max_bytes=0" in args
+    instruction_args = [arg for arg in args if arg.startswith("developer_instructions=")]
+    assert len(instruction_args) == 1
+    # The value travels as one argv element and must not contain a literal
+    # newline, which TOML would reject inside an unquoted value.
+    assert "\n" not in instruction_args[0]
+    assert json.loads(instruction_args[0].split("=", 1)[1]) == runner_prompt.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_runner_prompt_file_applies_to_thread_resume(tmp_path, monkeypatch):
+    runner_prompt = tmp_path / "SKILL_RUNNER.md"
+    runner_prompt.write_text("runner conventions", encoding="utf-8")
+    calls = []
+
+    def invoke(args, **kwargs):
+        calls.append(list(args))
+        _write_output(args)
+        return subprocess.CompletedProcess(
+            args, 0, '{"type":"thread.started","thread_id":"thread-1"}\n'
+        )
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    provider = CodexCLIProvider(runner_prompt_file=str(runner_prompt))
+    conversation_id = provider.new_conversation("system")
+    provider.resume(conversation_id, "first")
+    provider.resume(conversation_id, "second")
+
+    assert "resume" in calls[1]
+    for args in calls:
+        assert "project_doc_max_bytes=0" in args
+        instruction_args = [arg for arg in args if arg.startswith("developer_instructions=")]
+        assert json.loads(instruction_args[0].split("=", 1)[1]) == "runner conventions"
+
+
+def test_runner_prompt_file_is_absent_by_default(monkeypatch):
+    calls = []
+
+    def invoke(args, **kwargs):
+        calls.append(list(args))
+        _write_output(args)
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    CodexCLIProvider().send([Message(role="user", content="x")])
+
+    assert "project_doc_max_bytes=0" not in calls[0]
+    assert not [arg for arg in calls[0] if arg.startswith("developer_instructions=")]

@@ -131,3 +131,56 @@ def test_empty_output_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_unknown_conversation_id_raises() -> None:
     with pytest.raises(KeyError, match="Unknown conversation ID"):
         PiCLIProvider().resume("missing", "request")
+
+
+def test_runner_prompt_file_suppresses_context_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner_prompt = tmp_path / "SKILL_RUNNER.md"
+    runner_prompt.write_text("runner conventions", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def invoke(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "ok")
+
+    monkeypatch.setattr("re_agent.llm.pi_cli.subprocess.run", invoke)
+    PiCLIProvider(runner_prompt_file=str(runner_prompt), tools="").send(
+        [Message(role="system", content="be careful"), Message(role="user", content="x")]
+    )
+
+    args = calls[0]
+    assert "--no-context-files" in args
+    assert "--no-tools" in args
+    assert "--tools" not in args
+    first = args.index("--append-system-prompt")
+    second = args.index("--append-system-prompt", first + 1)
+    assert args[first + 1] == str(runner_prompt)
+    assert args[second + 1] == "be careful"
+
+
+def _capture(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def invoke(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "ok")
+
+    monkeypatch.setattr("re_agent.llm.pi_cli.subprocess.run", invoke)
+    return calls
+
+
+def test_tool_allowlist_narrows_pi_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture(monkeypatch)
+    PiCLIProvider(tools="read,grep,ls").send([Message(role="user", content="x")])
+
+    args = calls[0]
+    assert args[args.index("--tools") + 1] == "read,grep,ls"
+    assert "--no-tools" not in args
+
+
+def test_runner_prompt_file_is_absent_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture(monkeypatch)
+    PiCLIProvider().send([Message(role="user", content="x")])
+
+    assert "--no-context-files" not in calls[0]
+    assert "--no-tools" not in calls[0]
+    assert "--tools" not in calls[0]

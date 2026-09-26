@@ -58,6 +58,7 @@ def _apply_env_overrides(raw: dict[str, Any]) -> dict[str, Any]:
         ("RE_AGENT_LLM_BASE_URL", ["llm", "base_url"], str),
         ("RE_AGENT_BACKEND_CLI_PATH", ["backend", "cli_path"], str),
         ("RE_AGENT_BACKEND_TIMEOUT", ["backend", "timeout_s"], int),
+        ("RE_AGENT_LLM_RUNNER_PROMPT_FILE", ["llm", "runner_prompt_file"], str),
     ]
 
     for env_var, key_path, cast_type in env_mappings:

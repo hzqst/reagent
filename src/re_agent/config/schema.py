@@ -67,6 +67,16 @@ class LLMConfig:
     cli_path: str | None = None
     max_budget_usd: float | None = None
     effort: str | None = None
+    # Project-level prompt for the CLI providers.  When set, the coding-agent
+    # CLI's own project-prompt discovery (AGENTS.md / CLAUDE.md) is suppressed
+    # and this file is injected as the runner's system-level prompt instead.
+    runner_prompt_file: str | None = None
+    # Pi only: comma-separated tool allowlist passed to ``pi --tools``.  An
+    # empty string disables every tool (``--no-tools``); leaving it unset keeps
+    # Pi's own default.  A read-only subset such as ``"read,grep,ls"`` lets the
+    # role consult upstream headers while keeping IDA access, shell and file
+    # writes out of reach.
+    pi_tools: str | None = None
     input_cost_per_million: float = 0.0
     output_cost_per_million: float = 0.0
 

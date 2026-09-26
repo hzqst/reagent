@@ -37,10 +37,18 @@ class CodexCLIProvider:
         model: str = "gpt-5.4",
         timeout_s: int = 1800,
         codex_bin: str = "codex",
+        runner_prompt_file: str | None = None,
     ) -> None:
         self._model = model
         self._timeout_s = timeout_s
         self._codex_bin = codex_bin
+        # Read once: the config loader already refuses a missing file, and the
+        # contents become an argv element on every invocation.
+        self._runner_prompt = (
+            Path(runner_prompt_file).read_text(encoding="utf-8")
+            if runner_prompt_file is not None
+            else None
+        )
         self._conversations: dict[str, _Conversation] = {}
 
     def send(self, messages: list[Message], **kwargs: Any) -> str:
@@ -98,6 +106,7 @@ class CodexCLIProvider:
             "--json",
             "-m",
             str(model or self._model),
+            *self._prompt_isolation_args(),
         ]
 
     def _resume_args(self, thread_id: str, model: Any) -> list[str]:
@@ -114,6 +123,25 @@ class CodexCLIProvider:
             "--json",
             "-m",
             str(model or self._model),
+            *self._prompt_isolation_args(),
+        ]
+
+    def _prompt_isolation_args(self) -> list[str]:
+        """Suppress codex's project prompt and use the runner prompt instead.
+
+        ``project_doc_max_bytes=0`` is the only override that stops codex from
+        reading the project ``AGENTS.md`` (``project_doc_fallback_filenames``
+        only adds fallbacks).  ``developer_instructions`` replaces codex's base
+        instructions; the JSON encoding keeps the multi-line file contents a
+        single TOML-parseable argv element.
+        """
+        if self._runner_prompt is None:
+            return []
+        return [
+            "-c",
+            "project_doc_max_bytes=0",
+            "-c",
+            f"developer_instructions={json.dumps(self._runner_prompt)}",
         ]
 
     def _invoke(self, args: list[str], prompt: str) -> tuple[str, str | None]:

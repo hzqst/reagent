@@ -277,8 +277,26 @@ llm:
 
 Pi uses the authenticated local `pi` command
 ([pi.dev](https://pi.dev), `@earendil-works/pi-coding-agent`). ReAgent keeps
-Pi's default tools enabled and continues one Pi session across a role's turns.
-`cli_path` is optional; an unchanged `model` defers to Pi's own default.
+Pi's default tools enabled unless `pi_tools` narrows them, and continues one
+Pi session across a role's turns. `cli_path` is optional; an unchanged `model`
+defers to Pi's own default.
+
+### Runner prompt
+
+The CLI providers run from your project directory, so the harness would
+otherwise treat that project's own prompt (`AGENTS.md` / `CLAUDE.md`) as
+context for every reverser and checker call. `runner_prompt_file` suppresses
+that discovery and injects the named file as the role's system prompt instead:
+
+```yaml
+llm:
+  provider: pi
+  runner_prompt_file: .claude/SKILL_RUNNER.md
+  pi_tools: "read,grep,ls"   # "" disables every tool
+```
+
+The path is resolved against the working directory. Codex still loads its
+global `$CODEX_HOME/AGENTS.md`; only the project document is suppressed.
 
 Omit `agents.reverser` or `agents.checker` to reuse the top-level `llm`
 configuration for that role. A role block is a complete role configuration,

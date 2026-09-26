@@ -31,11 +31,15 @@ class PiCLIProvider:
         timeout_s: int = 1800,
         pi_bin: str = "pi",
         effort: str | None = None,
+        runner_prompt_file: str | None = None,
+        tools: str | None = None,
     ) -> None:
         self._model = model
         self._timeout_s = timeout_s
         self._pi_bin = pi_bin
         self._effort = effort
+        self._runner_prompt_file = runner_prompt_file
+        self._tools = tools
         self._conversations: dict[str, _Conversation] = {}
 
     def send(self, messages: list[Message], **kwargs: Any) -> str:
@@ -79,9 +83,23 @@ class PiCLIProvider:
             cmd.extend(["--model", selected_model])
         if self._effort is not None:
             cmd.extend(["--thinking", self._effort])
+        if self._tools is not None:
+            # Pi's allowlist covers built-in, extension and custom tools alike,
+            # so a read-only subset also keeps the MCP adapter unreachable.
+            if self._tools.strip():
+                cmd.extend(["--tools", self._tools])
+            else:
+                cmd.append("--no-tools")
+        if self._runner_prompt_file is not None:
+            # Suppress Pi's AGENTS.md/CLAUDE.md discovery and supply the project
+            # runner prompt in its place.  Pi reads the value as a file because
+            # the path exists.
+            cmd.extend(
+                ["--no-context-files", "--append-system-prompt", self._runner_prompt_file]
+            )
         if system:
-            # Append rather than replace Pi's default prompt so the enabled tools
-            # keep their usage guidance.
+            # Append rather than replace Pi's default prompt, which stays the
+            # base for every turn.
             cmd.extend(["--append-system-prompt", system])
 
         try:
