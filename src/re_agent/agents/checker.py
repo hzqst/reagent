@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from re_agent.backend.protocol import REBackend
-from re_agent.core.models import CheckerVerdict, FunctionTarget, Verdict
+from re_agent.core.models import CheckerVerdict, FunctionTarget, SymbolProposal, Verdict
 from re_agent.llm.protocol import LLMProvider, Message
 from re_agent.utils.templates import render_template
 
@@ -16,6 +16,24 @@ VERDICT_RE = re.compile(r"VERDICT:\s*(PASS|FAIL)", re.I)
 SUMMARY_RE = re.compile(r"SUMMARY:\s*(.+)")
 ISSUES_RE = re.compile(r"ISSUES:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
 FIX_RE = re.compile(r"FIX_INSTRUCTIONS:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
+SYMBOL_ISSUES_RE = re.compile(r"SYMBOL_ISSUES:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
+
+
+def _render_symbol(symbol: SymbolProposal | None) -> str:
+    """Render a proposal as prompt text, or a placeholder when absent."""
+    if symbol is None:
+        return "(none proposed)"
+    lines = [f"name: {symbol.name}", f"confidence: {symbol.confidence}"]
+    if symbol.comment:
+        lines.append(f"comment: {symbol.comment}")
+    if symbol.evidence:
+        lines.append("evidence: " + "; ".join(symbol.evidence))
+    for change in symbol.struct_changes:
+        lines.append(
+            f"struct_change: {change.struct_name}.{change.member} {change.operation} "
+            f"offset={change.offset or '?'} type={change.type_str or '?'}"
+        )
+    return "\n".join(lines)
 
 
 class CheckerAgent:
@@ -28,8 +46,19 @@ class CheckerAgent:
         self.last_prompt: str = ""
         self.last_response: str = ""
 
-    def check(self, code: str, target: FunctionTarget) -> CheckerVerdict:
-        """Check reversed code against decompilation. Returns CheckerVerdict."""
+    def check(
+        self,
+        code: str,
+        target: FunctionTarget,
+        symbol: SymbolProposal | None = None,
+    ) -> CheckerVerdict:
+        """Check reversed code against decompilation. Returns CheckerVerdict.
+
+        Args:
+            code: The reversed candidate.
+            target: The function being reversed.
+            symbol: Optional proposed symbol, validated alongside the code.
+        """
         decompile_result = self.backend.decompile(target.address)
         decompiled = decompile_result.raw_output
 
@@ -41,6 +70,7 @@ class CheckerAgent:
             address=target.address,
             reversed_code=code,
             decompiled=decompiled,
+            proposed_symbol=_render_symbol(symbol),
         )
 
         from re_agent.agents.reverser import ReverserAgent
@@ -103,11 +133,20 @@ class CheckerAgent:
                 if item and item.lower() != "none":
                     fix_instructions.append(item)
 
+        symbol_issues: list[str] = []
+        symbol_match = SYMBOL_ISSUES_RE.search(response)
+        if symbol_match:
+            for line in symbol_match.group(1).strip().splitlines():
+                item = line.strip().lstrip("- ").strip()
+                if item and item.lower() != "none":
+                    symbol_issues.append(item)
+
         return CheckerVerdict(
             verdict=verdict,
             summary=summary,
             issues=issues,
             fix_instructions=fix_instructions,
+            symbol_issues=symbol_issues,
         )
 
     @staticmethod
@@ -130,9 +169,13 @@ class CheckerAgent:
         }.get(raw_verdict, Verdict.UNKNOWN)
         issues = payload.get("issues", [])
         fixes = payload.get("fix_instructions", [])
+        symbol_issues = payload.get("symbol_issues", [])
         return CheckerVerdict(
             verdict=verdict,
             summary=str(payload.get("summary", "")),
             issues=[str(item) for item in issues] if isinstance(issues, list) else [],
             fix_instructions=[str(item) for item in fixes] if isinstance(fixes, list) else [],
+            symbol_issues=(
+                [str(item) for item in symbol_issues] if isinstance(symbol_issues, list) else []
+            ),
         )

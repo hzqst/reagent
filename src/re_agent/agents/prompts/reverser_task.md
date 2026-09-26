@@ -29,3 +29,5 @@ Requirements:
 4. Use existing project patterns and naming conventions
 5. Output the complete function implementation in a ```cpp block
 6. End with: REVERSED_FUNCTION: ${class_name}::${function_name} (${address})
+7. If the evidence supports naming this function, add the ```json symbol block
+   described in the system prompt. Omit it rather than guessing.

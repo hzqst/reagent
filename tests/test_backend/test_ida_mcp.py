@@ -33,7 +33,7 @@ def _backend(monkeypatch, responses, session="sess-1"):
             raise outcome
         return outcome, session
 
-    monkeypatch.setattr("re_agent.backend.ida_mcp._post_jsonrpc", post)
+    monkeypatch.setattr("re_agent.backend.ida_mcp.post_jsonrpc", post)
     return calls
 
 

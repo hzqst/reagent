@@ -62,6 +62,7 @@ class CheckerVerdict:
     summary: str
     issues: list[str] = field(default_factory=list)
     fix_instructions: list[str] = field(default_factory=list)
+    symbol_issues: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -84,6 +85,95 @@ class ValidationVerdict:
     checks: list[dict[str, str]] = field(default_factory=list)
 
 
+def _string_list(value: object) -> list[str]:
+    """Coerce a field into a list of non-empty strings."""
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _confidence(value: object) -> str:
+    """Normalise a confidence marker; anything unrecognised stays conservative."""
+    return "verified" if str(value or "").strip().lower() == "verified" else "inferred"
+
+
+STRUCT_OPERATIONS = frozenset({"move", "rename", "retype"})
+
+
+@dataclass
+class StructChange:
+    """A proposed correction to a struct member in the analysis database."""
+
+    struct_name: str
+    member: str
+    operation: str  # "move", "rename", or "retype"
+    offset: str = ""
+    type_str: str = ""
+    confidence: str = "inferred"
+    evidence: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: object) -> StructChange | None:
+        """Parse one proposal, or ``None`` when it is malformed."""
+        if not isinstance(data, dict):
+            return None
+        struct_name = str(data.get("struct") or data.get("struct_name") or "").strip()
+        member = str(data.get("member") or "").strip()
+        operation = str(data.get("operation") or "").strip().lower()
+        if not struct_name or not member or operation not in STRUCT_OPERATIONS:
+            return None
+        return cls(
+            struct_name=struct_name,
+            member=member,
+            operation=operation,
+            offset=str(data.get("offset") or "").strip(),
+            type_str=str(data.get("type") or data.get("type_str") or "").strip(),
+            confidence=_confidence(data.get("confidence")),
+            evidence=_string_list(data.get("evidence")),
+        )
+
+
+@dataclass
+class SymbolProposal:
+    """A proposed name and comment for a function in the analysis database.
+
+    ``confidence`` is ``"verified"`` when the name comes from a deterministic
+    source (a header annotation) and ``"inferred"`` when a model proposed it.
+    """
+
+    name: str
+    comment: str = ""
+    confidence: str = "inferred"
+    evidence: list[str] = field(default_factory=list)
+    struct_changes: list[StructChange] = field(default_factory=list)
+    checker_ok: bool = True
+    checker_notes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: object) -> SymbolProposal | None:
+        """Parse a proposal, or ``None`` when it carries no usable name."""
+        if not isinstance(data, dict):
+            return None
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return None
+        raw_changes = data.get("struct_changes")
+        changes = [_c for _c in (
+            StructChange.from_dict(item) for item in (raw_changes if isinstance(raw_changes, list) else [])
+        ) if _c is not None]
+        return cls(
+            name=name,
+            comment=str(data.get("comment") or "").strip(),
+            confidence=_confidence(data.get("confidence")),
+            evidence=_string_list(data.get("evidence")),
+            struct_changes=changes,
+            checker_ok=bool(data.get("checker_ok", True)),
+            checker_notes=_string_list(data.get("checker_notes")),
+        )
+
+
 @dataclass
 class ReversalResult:
     """Complete result of reversing one function."""
@@ -99,6 +189,7 @@ class ReversalResult:
     validation_verdict: ValidationVerdict | None = None
     run_id: str = ""
     error: str | None = None
+    symbol: SymbolProposal | None = None
 
 
 # ---------------------------------------------------------------------------

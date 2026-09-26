@@ -102,12 +102,12 @@ def run_fix_loop(
 
         # Reverse (or fix)
         if round_num == 1:
-            code, tag = reverser.reverse(target)
+            code, _ = reverser.reverse(target)
         else:
             assert last_verdict is not None
-            code, tag = reverser.fix(
+            code, _ = reverser.fix(
                 checker_report=last_verdict.summary,
-                issues=[*last_verdict.issues, *gate_issues],
+                issues=[*last_verdict.issues, *last_verdict.symbol_issues, *gate_issues],
                 fix_instructions=last_verdict.fix_instructions,
                 target=target,
                 objective_findings=last_objective_verdict.findings if last_objective_verdict else None,
@@ -129,7 +129,7 @@ def run_fix_loop(
             log_path.write_text(json.dumps(log_entry, indent=2), encoding="utf-8")
 
         # Check
-        verdict = checker.check(code, target)
+        verdict = checker.check(code, target, reverser.last_symbol)
         last_verdict = verdict
 
         objective_verdict: ObjectiveVerdict | None = None
@@ -162,6 +162,11 @@ def run_fix_loop(
             check_path = log_dir / f"round{round_num}-{timestamp}-checker.json"
             check_path.write_text(json.dumps(check_log, indent=2), encoding="utf-8")
 
+        symbol = reverser.last_symbol
+        if symbol is not None:
+            symbol.checker_ok = not verdict.symbol_issues
+            symbol.checker_notes = list(verdict.symbol_issues)
+
         result = ReversalResult(
             target=target,
             code=code,
@@ -171,6 +176,7 @@ def run_fix_loop(
             success=verdict.verdict == Verdict.PASS
             and (objective_verdict is None or objective_verdict.verdict != Verdict.FAIL),
             run_id=run_id,
+            symbol=symbol,
         )
         if candidate_gate is not None:
             result = candidate_gate(result)

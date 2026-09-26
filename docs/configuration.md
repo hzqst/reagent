@@ -110,6 +110,68 @@ the `ida://struct/{name}` MCP resource instead. A profile that omits
 `has_structs: false` even though struct retrieval still works. No production
 call site consults this flag.
 
+### Applying annotations back to the database
+
+A reversal run may propose a name and comment for each function it
+reconstructs. Proposals are collected in `report_dir/symbols.json` and are
+**never** written to the database on their own. `annotate` applies them:
+
+```sh
+# Preview only — nothing is written without --write.
+re-agent annotate --only-unnamed
+
+# Apply renames and comments, then persist the database.
+re-agent annotate --only-unnamed --write --save
+```
+
+`annotate` needs `backend.type: ida-mcp`, because it writes through the same
+MCP endpoint the read backend uses.
+
+| Flag | Effect |
+| --- | --- |
+| `--write` | Actually apply changes. Without it the command is a dry run that prints the diff and an undo list. |
+| `--only-unnamed` | Skip addresses that already carry a non-placeholder name (`sub_*`, `nullsub_*`, `FUN_*`, ...). Recommended: it keeps reviewed symbols from being overwritten. |
+| `--include-flagged` | Also apply proposals the checker disputed. By default those are skipped. |
+| `--allow-struct-changes` | Permit struct member changes. Required in addition to `--write`. |
+| `--save` | Save the IDA database once writing is done. |
+
+Proposals may also come from upstream headers rather than from a model:
+
+```sh
+re-agent annotate --from-hooks YRpp/ YRpp-phobos-dev/ --only-unnamed --write
+```
+
+`--from-hooks` scans the given directories with `project_profile.hook_patterns`
+and derives each entry's class from its file name (`TechnoClass.h` →
+`TechnoClass`). Those proposals are marked `verified`, because a header
+annotation states the name rather than inferring it.
+
+The scan is deliberately conservative, because upstream header trees are often
+duplicated copies of one another. An entry is dropped when the sources disagree
+about its name, when the header's own name is a placeholder (`sub_*`), or when
+two addresses would claim the same name and collide on rename; the count of
+dropped entries is reported on stderr. A pattern must place the function name
+in group 1 and the address in group 2, and should bound its whitespace classes
+to a single line — a bare `\s` will cross the newline and capture an enclosing
+class name instead of the function name.
+
+Two safety properties are worth knowing:
+
+- **A name is never overwritten.** Renames are issued with
+  `allow_overwrite: false`, and `--only-unnamed` filters on top of that.
+- **Struct changes are checked and reverted on surprise.** A change that would
+  alter the struct's total size is rejected outright — it would shift every
+  following consumer. A `move` that does not land at the requested offset is
+  rolled back. Struct changes read IDA's own printed declaration (via a fixed
+  `py_eval` template) rather than rebuilding it, so alignment attributes and
+  gaps are preserved; this requires the IDA host to share a filesystem with
+  re-agent.
+
+Proposals carry a `confidence` marker: `verified` when a header states the name,
+`inferred` when a model derived it from behavior. Both reach the database, and
+the comment records which one it was, so an inferred name can never be mistaken
+for a reviewed one.
+
 ## Project Profile
 
 The `project_profile` section makes re-agent work across different RE projects.

@@ -42,7 +42,7 @@ _PAGE_LIMIT = 100
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 
-def _ida_target(target: str) -> str:
+def ida_target(target: str) -> str:
     """Render a target the way ``ida-pro-mcp`` expects it.
 
     ReAgent normalizes addresses to bare lowercase hex (``utils/address.py``),
@@ -55,7 +55,23 @@ def _ida_target(target: str) -> str:
     return candidate
 
 
-def _post_jsonrpc(
+def as_list(structured: Any) -> list[Any]:
+    """Unwrap a list-returning tool's ``{"result": [...]}`` envelope.
+
+    ``ida-pro-mcp`` passes dict results through untouched but wraps list
+    results in a single ``result`` key, so callers of list-returning tools
+    need this.  Shared with the write-side client.
+    """
+    if isinstance(structured, list):
+        return structured
+    if isinstance(structured, dict):
+        value = structured.get("result")
+        if isinstance(value, list):
+            return value
+    raise RuntimeError(f"Expected a list result from the IDA MCP server, got {type(structured).__name__}")
+
+
+def post_jsonrpc(
     url: str,
     method: str,
     params: dict[str, Any],
@@ -130,7 +146,7 @@ class IdaMcpBackend:
         """Run the MCP ``initialize`` handshake once, if not already done."""
         if self._initialized:
             return
-        _, session_id = _post_jsonrpc(
+        _, session_id = post_jsonrpc(
             self._url,
             "initialize",
             {
@@ -155,7 +171,7 @@ class IdaMcpBackend:
             return self._response_cache[cache_key]
 
         self._ensure_session()
-        result, session_id = _post_jsonrpc(
+        result, session_id = post_jsonrpc(
             self._url,
             "tools/call",
             {"name": tool, "arguments": arguments},
@@ -190,20 +206,9 @@ class IdaMcpBackend:
         return _get_json(str(download_url), self._timeout_s)
 
     @staticmethod
-    def _as_list(structured: Any) -> list[Any]:
-        """Unwrap a list-returning tool's ``{"result": [...]}`` envelope."""
-        if isinstance(structured, list):
-            return structured
-        if isinstance(structured, dict):
-            value = structured.get("result")
-            if isinstance(value, list):
-                return value
-        raise RuntimeError(f"Expected a list result from the IDA MCP server, got {type(structured).__name__}")
-
-    @staticmethod
     def _first_item(structured: Any) -> dict[str, Any] | None:
         """Return the first batch item, or ``None`` when the batch is empty."""
-        items = IdaMcpBackend._as_list(structured)
+        items = as_list(structured)
         return items[0] if items and isinstance(items[0], dict) else None
 
     # -- capabilities ---------------------------------------------------------
@@ -232,7 +237,7 @@ class IdaMcpBackend:
 
     def _probe_capabilities(self) -> BackendCapabilities:
         self._ensure_session()
-        result, session_id = _post_jsonrpc(
+        result, session_id = post_jsonrpc(
             self._url, "tools/list", {}, self._timeout_s, self._session_id
         )
         if session_id:
@@ -255,7 +260,7 @@ class IdaMcpBackend:
 
     def decompile(self, target: str) -> DecompileResult:
         """Decompile a function by address or symbol name."""
-        payload = self._call("decompile", {"addr": _ida_target(target), "include_addresses": True})
+        payload = self._call("decompile", {"addr": ida_target(target), "include_addresses": True})
         if not isinstance(payload, dict):
             raise RuntimeError(f"IDA decompile returned an unexpected payload for {target}")
         if payload.get("error"):
@@ -276,7 +281,7 @@ class IdaMcpBackend:
         )
 
     def _function_name(self, target: str) -> str | None:
-        item = self._first_item(self._call("lookup_funcs", {"queries": [_ida_target(target)]}))
+        item = self._first_item(self._call("lookup_funcs", {"queries": [ida_target(target)]}))
         if not item or item.get("error"):
             return None
         info = item.get("fn")
@@ -286,7 +291,7 @@ class IdaMcpBackend:
         return None
 
     def _callee_count(self, target: str) -> int | None:
-        item = self._first_item(self._call("callees", {"addrs": [_ida_target(target)]}))
+        item = self._first_item(self._call("callees", {"addrs": [ida_target(target)]}))
         if not item or item.get("error"):
             return None
         callees = item.get("callees")
@@ -296,14 +301,14 @@ class IdaMcpBackend:
 
     def xrefs_to(self, target: str) -> list[XRef]:
         """Parse cross-references TO a function."""
-        item = self._first_item(self._call("xrefs_to", {"addrs": [_ida_target(target)]}))
+        item = self._first_item(self._call("xrefs_to", {"addrs": [ida_target(target)]}))
         if not item or item.get("error"):
             return []
         return self._parse_xrefs(item.get("xrefs"))
 
     def xrefs_from(self, target: str) -> list[XRef]:
         """Parse cross-references FROM a function (IDA's "callees")."""
-        item = self._first_item(self._call("callees", {"addrs": [_ida_target(target)]}))
+        item = self._first_item(self._call("callees", {"addrs": [ida_target(target)]}))
         if not item or item.get("error"):
             return []
         return self._parse_xrefs(item.get("callees"))
@@ -335,7 +340,7 @@ class IdaMcpBackend:
     def get_struct(self, name: str) -> StructDef | None:
         """Retrieve a struct definition by name via the ``ida://struct`` resource."""
         try:
-            payload, _ = _post_jsonrpc(
+            payload, _ = post_jsonrpc(
                 self._url,
                 "resources/read",
                 {"uri": f"ida://struct/{name}"},
@@ -354,7 +359,7 @@ class IdaMcpBackend:
 
     def get_asm(self, target: str) -> AsmResult | None:
         """Retrieve disassembly for a function."""
-        payload = self._call("disasm", {"addr": _ida_target(target)})
+        payload = self._call("disasm", {"addr": ida_target(target)})
         if not isinstance(payload, dict) or payload.get("error"):
             return None
 
@@ -374,10 +379,10 @@ class IdaMcpBackend:
     # -- evidence artifacts ---------------------------------------------------
 
     def get_context(self, target: str) -> AnalysisArtifact | None:
-        return self._artifact("function-context", "analyze_function", {"addr": _ida_target(target)})
+        return self._artifact("function-context", "analyze_function", {"addr": ida_target(target)})
 
     def get_cfg(self, target: str) -> AnalysisArtifact | None:
-        return self._artifact("cfg", "basic_blocks", {"addrs": [_ida_target(target)]})
+        return self._artifact("cfg", "basic_blocks", {"addrs": [ida_target(target)]})
 
     def search_strings(self, pattern: str) -> AnalysisArtifact | None:
         return self._artifact("strings", "find_regex", {"pattern": pattern})
@@ -425,7 +430,7 @@ class IdaMcpBackend:
         return self._list_functions(filter_pattern or "*")
 
     def _list_functions(self, filter_pattern: str) -> list[FunctionEntry]:
-        pages = self._as_list(
+        pages = as_list(
             self._call(
                 "list_funcs",
                 {"queries": [{"filter": filter_pattern, "offset": 0, "count": _PAGE_LIMIT}]},

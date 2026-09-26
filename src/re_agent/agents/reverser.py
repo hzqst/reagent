@@ -10,7 +10,7 @@ from re_agent.agents.source_context import SourceContextBuilder
 from re_agent.backend.protocol import REBackend
 from re_agent.config.schema import ProjectProfile
 from re_agent.core.knowledge_graph import KnowledgeGraph
-from re_agent.core.models import FunctionTarget
+from re_agent.core.models import FunctionTarget, SymbolProposal
 from re_agent.core.session import Session
 from re_agent.llm.protocol import LLMProvider, Message
 from re_agent.parity.source_indexer import SourceIndexer
@@ -20,6 +20,10 @@ from re_agent.utils.templates import render_template
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 CODE_BLOCK_RE = re.compile(r"```(?:cpp|c\+\+)?\s*\n(.*?)```", re.S)
 REVERSED_TAG_RE = re.compile(r"REVERSED_FUNCTION:\s*(.+)")
+# The proposed symbol arrives as a fenced JSON block alongside the code block.
+# ``CODE_BLOCK_RE`` requires a ``cpp``/``c++``/absent language tag, so a
+# ```json block never matches it.
+JSON_BLOCK_RE = re.compile(r"```json\s*\n(\{.*?\})\s*```", re.S)
 
 
 class ReverserAgent:
@@ -57,6 +61,10 @@ class ReverserAgent:
         self._knowledge_graph = KnowledgeGraph(report_dir / "knowledge-graph.json") if report_dir is not None else None
         self.last_prompt: str = ""
         self.last_response: str = ""
+        # Symbol proposal parsed from the most recent response, if the model
+        # offered one.  Kept as instance state so the ``(code, tag)`` signatures
+        # of ``reverse``/``fix`` stay unchanged.
+        self.last_symbol: SymbolProposal | None = None
 
     def reverse(self, target: FunctionTarget) -> tuple[str, str]:
         """Reverse a function. Returns (code, reversed_function_tag)."""
@@ -129,6 +137,7 @@ class ReverserAgent:
         self.last_response = response
         code = self._extract_code(response)
         tag = self._extract_tag(response)
+        self.last_symbol = self._extract_symbol(response)
         return code, tag
 
     def _project_rules(self) -> str:
@@ -295,6 +304,7 @@ class ReverserAgent:
         self.last_response = response
         code = self._extract_code(response)
         tag = self._extract_tag(response)
+        self.last_symbol = self._extract_symbol(response)
         return code, tag
 
     @staticmethod
@@ -314,6 +324,27 @@ class ReverserAgent:
             return str(payload["reversed_function"]).strip()
         m = REVERSED_TAG_RE.search(response)
         return m.group(1).strip() if m else ""
+
+    @staticmethod
+    def _extract_symbol(response: str) -> SymbolProposal | None:
+        """Parse the optional symbol proposal, or ``None`` when absent.
+
+        Accepts either a whole-response JSON object or a fenced ```json block,
+        matching how ``_extract_code``/``_extract_tag`` tolerate both shapes.
+        """
+        payload = ReverserAgent._extract_json(response)
+        if payload is None:
+            block = JSON_BLOCK_RE.search(response)
+            if block is None:
+                return None
+            try:
+                parsed = json.loads(block.group(1))
+            except json.JSONDecodeError:
+                return None
+            payload = parsed if isinstance(parsed, dict) else None
+        if payload is None:
+            return None
+        return SymbolProposal.from_dict(payload.get("symbol"))
 
     @staticmethod
     def _extract_json(response: str) -> dict[str, object] | None:

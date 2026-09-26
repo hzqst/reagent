@@ -12,4 +12,7 @@ ${reversed_code}
 ${decompiled}
 ```
 
+**Proposed symbol (validate it; do not rewrite the code to fit it):**
+${proposed_symbol}
+
 Check every line, offset, call, branch, and expression order. Return only the JSON object required by the system prompt.

@@ -10,6 +10,7 @@ from re_agent.backend.protocol import REBackend
 from re_agent.config.schema import ReAgentConfig
 from re_agent.core.models import Finding, FunctionTarget, HookEntry, ReversalResult, ValidationVerdict, Verdict
 from re_agent.core.session import Session
+from re_agent.core.symbols import record_symbol, symbols_path
 from re_agent.llm.protocol import LLMProvider
 from re_agent.parity.engine import fetch_ghidra_data, score_single
 from re_agent.parity.rules import read_semantic_rules
@@ -86,6 +87,17 @@ def reverse_single(
             logger.info("Code written to %s", code_path)
         except OSError as exc:
             logger.warning("Failed to write code file: %s", exc)
+
+    if result.symbol is not None:
+        try:
+            record_symbol(
+                symbols_path(Path(config.output.report_dir)),
+                result.target.address,
+                result.symbol,
+            )
+            logger.info("Symbol proposal recorded for %s", result.target.address)
+        except OSError as exc:
+            logger.warning("Failed to record symbol proposal: %s", exc)
 
     if session:
         session.record_result(result)
@@ -194,6 +206,7 @@ def validate_result(
                 rounds_used=result.rounds_used,
                 success=accepted,
                 run_id=result.run_id,
+                symbol=result.symbol,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             logger.warning("Candidate validation failed for %s: %s", target.address, exc)

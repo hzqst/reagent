@@ -13,7 +13,9 @@ from re_agent.core.models import (
     ReversalResult,
     SemanticRule,
     SourceMatch,
+    StructChange,
     StructDef,
+    SymbolProposal,
     Verdict,
     XRef,
 )
@@ -23,4 +25,5 @@ __all__ = [
     "CheckerVerdict", "ReversalResult", "DecompileResult", "XRef",
     "FunctionEntry", "StructDef", "EnumDef", "AsmResult",
     "SourceMatch", "GhidraData", "HookEntry", "SemanticRule", "ManualCheckEntry",
+    "StructChange", "SymbolProposal",
 ]

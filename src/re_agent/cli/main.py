@@ -67,6 +67,36 @@ def build_parser() -> argparse.ArgumentParser:
     estimate_p.add_argument("--class", dest="class_name", help="Class name to estimate")
     estimate_p.add_argument("--limit", type=int, default=50, help="Maximum functions to inspect")
 
+    # annotate
+    ann_p = sub.add_parser("annotate", help="Apply symbol proposals to an IDA database")
+    ann_p.add_argument("--symbols", help="Proposals file (default: report_dir/symbols.json)")
+    ann_p.add_argument(
+        "--from-hooks",
+        nargs="+",
+        help="Header directories to read symbol annotations from instead of --symbols",
+    )
+    ann_p.add_argument(
+        "--write", action="store_true", help="Apply the changes; without it nothing is written"
+    )
+    ann_p.add_argument(
+        "--only-unnamed",
+        action="store_true",
+        help="Skip addresses that already carry a non-placeholder name",
+    )
+    ann_p.add_argument(
+        "--include-flagged",
+        action="store_true",
+        help="Also apply proposals the checker disputed",
+    )
+    ann_p.add_argument(
+        "--allow-struct-changes",
+        action="store_true",
+        help="Permit struct member changes, which modify a shared type",
+    )
+    ann_p.add_argument(
+        "--save", action="store_true", help="Save the IDA database after writing"
+    )
+
     return parser
 
 
@@ -119,6 +149,11 @@ def _main(argv: list[str] | None = None) -> int:
         from re_agent.cli.cmd_estimate import cmd_estimate
 
         return cmd_estimate(args)
+
+    if args.command == "annotate":
+        from re_agent.cli.cmd_annotate import cmd_annotate
+
+        return cmd_annotate(args)
 
     parser.print_help()
     return 1
