@@ -25,10 +25,24 @@ When a prototype is proposed, also return a `prototype_review` object:
  "declaration": "copy the exact proposed declaration",
  "notes": ["specific evidence or unresolved conflicts"]}.
 Review its evidence independently of the symbol name and code verdict. Approval
-requires matching-version header/address evidence, binary evidence for the class
-and ABI, existing referenced types, and preservation of return type, calling
-convention, parameter count/locations, qualifiers and hidden arguments. The only
-supported change is `void *` to an existing complete named struct/class pointer.
+requires matching-version header and binary address-binding evidence, existing
+referenced types, and preservation of calling convention, parameter count,
+argument/return locations, stack layout, qualifiers, flags and hidden arguments.
+The default change is `void *` argument to complete named struct/class pointer.
+Extended corrections may change same-width integers to integers or ordinary
+data pointers (void or complete named struct/class pointers), including returns.
+Never approve floats, bool/enums, aggregate changes, arbitrary pointer casts,
+function pointers, variadics or special calling conventions.
+
+For inferred prototypes or extended corrections, independently review
+`evidence_kind`, `evidence_details` (header, version, address_binding), and
+`abi_evidence` (calling_convention and every changed return/arg:N position,
+including explicit this). A signature-bound inline definition can be approved
+without an address annotation when specific binary behavior and call sites bind
+it to this address; it must remain inferred. Approval does not authorize writing:
+annotate requires separate operator opt-ins. Equal widths/registers alone do
+not establish semantics. Verify signedness and every returning path for a return
+correction; a single mov eax,this or C++ constructor syntax is insufficient.
 Missing evidence means unreviewed; conflicting evidence means disputed. Never
-approve merely because the candidate uses a class name or the naming confidence
-is verified. Missing prototype_review does not count as approval.
+approve merely because the candidate uses a class name or naming confidence is
+verified. Missing prototype_review does not count as approval.

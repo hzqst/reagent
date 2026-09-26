@@ -151,6 +151,9 @@ class FunctionPrototypeProposal:
     required_types: list[str] = field(default_factory=list)
     confidence: str = "inferred"
     evidence: list[str] = field(default_factory=list)
+    evidence_kind: str = ""
+    evidence_details: dict[str, str] = field(default_factory=dict)
+    abi_evidence: dict[str, str] = field(default_factory=dict)
     review_status: str = "unreviewed"
     review_notes: list[str] = field(default_factory=list)
     validation_error: str = ""
@@ -159,7 +162,9 @@ class FunctionPrototypeProposal:
     def from_dict(cls, data: object) -> FunctionPrototypeProposal:
         if not isinstance(data, dict):
             return cls(validation_error="prototype must be an object")
-        for key in ("declaration", "expected_current", "confidence", "review_status", "validation_error"):
+        for key in (
+            "declaration", "expected_current", "confidence", "review_status", "validation_error", "evidence_kind",
+        ):
             if key in data and not isinstance(data[key], str):
                 return cls(validation_error=f"prototype.{key} must be a string")
         for key in ("required_types", "evidence", "review_notes"):
@@ -168,6 +173,19 @@ class FunctionPrototypeProposal:
                 or any(not isinstance(item, str) or not item.strip() for item in data[key])
             ):
                 return cls(validation_error=f"prototype.{key} must be a list of non-empty strings")
+        if data.get("evidence_kind", "") not in {"", "address-bound", "signature-bound"}:
+            return cls(validation_error="Unknown prototype.evidence_kind")
+        if data.get("evidence_kind") == "signature-bound" and data.get("confidence") == "verified":
+            return cls(validation_error="signature-bound prototypes must remain inferred")
+        for key in ("evidence_details", "abi_evidence"):
+            value = data.get(key, {})
+            if not isinstance(value, dict) or any(
+                not isinstance(k, str) or not k.strip() or not isinstance(v, str) or not v.strip()
+                for k, v in value.items()
+            ):
+                return cls(validation_error=f"prototype.{key} must map non-empty strings to non-empty strings")
+        if "confidence" in data and data["confidence"] not in {"verified", "inferred"}:
+            return cls(validation_error="Unknown prototype.confidence")
         declaration = str(data.get("declaration", "")).strip()
         status = data.get("review_status", "unreviewed")
         return cls(
@@ -176,6 +194,9 @@ class FunctionPrototypeProposal:
             required_types=_string_list(data.get("required_types")),
             confidence=_confidence(data.get("confidence")),
             evidence=_string_list(data.get("evidence")),
+            evidence_kind=data.get("evidence_kind", ""),
+            evidence_details=dict(data.get("evidence_details", {})),
+            abi_evidence=dict(data.get("abi_evidence", {})),
             review_status=status if status in {"approved", "disputed"} else "unreviewed",
             review_notes=_string_list(data.get("review_notes")),
             validation_error=str(data.get("validation_error") or ("" if declaration else "Missing declaration")),

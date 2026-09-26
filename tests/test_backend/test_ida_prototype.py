@@ -28,6 +28,15 @@ class Type:
     def is_ptr(self):
         return self.pointee is not None
 
+    def is_integral(self):
+        return self.name in {"int", "unsigned int", "bool", "enum"}
+
+    def is_enum(self):
+        return self.name == "enum"
+
+    def is_bool(self):
+        return self.name == "bool"
+
     def is_void(self):
         return self.name == "void"
 
@@ -162,8 +171,8 @@ def test_preflight_does_not_write_and_normalizes_nameless_types(ida):
 
 
 @pytest.mark.parametrize("change,reason", [
-    ("return", "Return type"), ("cc", "Calling convention"), ("count", "argument count"),
-    ("flags", "function flags"), ("argflags", "Argument flags"), ("argloc", "ABI location"),
+    ("return", "return"), ("cc", "Calling convention"), ("count", "argument count"),
+    ("flags", "Function flags"), ("argflags", "Argument flags"), ("argloc", "ABI location"),
     ("scalar", "void pointer"), ("qualifier", "qualifier-preserving"),
 ])
 def test_rejects_abi_and_unsupported_type_changes(ida, change, reason):
@@ -294,3 +303,48 @@ def test_model_text_is_data_not_python(ida, capsys):
 def test_empty_or_failed_helper_response_is_never_success(payload):
     with pytest.raises(RuntimeError):
         prototype_result(payload)
+
+
+@pytest.mark.parametrize("authorized", [False, True])
+def test_constructor_corrections_need_explicit_write_authorization(ida, authorized):
+    state, registry = ida
+    registry[OLD].result = Type("int")
+    registry[NEW].result = CLASS_PTR
+    registry[OLD].args.extend([arg(Type("int"), register="stack0"),
+                               arg(Type("unsigned int"), register="stack4")])
+    registry[NEW].args.extend([arg(VOID_PTR, register="stack0"), arg(Type("int"), register="stack4")])
+    state.current = copy.deepcopy(registry[OLD])
+    prepared = plan(allow_abi_type_corrections=True)
+    assert True is prepared["ok"]
+    assert [d["position"] for d in prepared["differences"]] == ["return", "arg:0", "arg:1", "arg:2"]
+    assert True is prepared["requires_abi_corrections"]
+    assert state.writes == []
+    result = _ida_prototype({"mode": "apply", "address": "0x4A3890", "original": prepared["current"],
+                             "declaration": NEW, "proposed_key": prepared["proposed_key"],
+                             "allow_abi_type_corrections": authorized})
+    assert authorized is result["ok"]
+    assert authorized is bool(state.writes)
+
+
+@pytest.mark.parametrize("problem", ["width", "bool", "enum", "float", "qualifier", "location", "cc", "count"])
+def test_extended_policy_keeps_hard_constraints(ida, problem):
+    state, registry = ida
+    registry[OLD].result = Type("int")
+    registry[NEW].result = copy.deepcopy(CLASS_PTR)
+    if problem == "width":
+        registry[NEW].result.get_size = lambda: 8
+    elif problem in {"bool", "enum", "float"}:
+        registry[OLD].result = Type(problem)
+    elif problem == "qualifier":
+        registry[NEW].result.const = True
+    elif problem == "location":
+        registry[NEW].args[0].argloc = loc("edx")
+    elif problem == "cc":
+        registry[NEW].cc = 48
+    else:
+        registry[NEW].args.append(arg(VOID_PTR))
+    state.current = copy.deepcopy(registry[OLD])
+    result = plan(allow_abi_type_corrections=True)
+    assert False is result["ok"]
+    assert result["code"] == "unsupported-change"
+    assert state.writes == []

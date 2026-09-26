@@ -104,6 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Permit reviewed void-pointer refinements that preserve the function ABI",
     )
+    ann_p.add_argument("--allow-inferred-prototypes", action="store_true",
+                       help="Accept independently reviewed inferred prototypes; requires --address")
+    ann_p.add_argument("--allow-abi-type-corrections", action="store_true",
+                       help="Permit reviewed same-width integer/data-pointer corrections; requires --address")
     ann_p.add_argument(
         "--save", action="store_true", help="Save the IDA database after writing"
     )

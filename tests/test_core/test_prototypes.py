@@ -45,3 +45,27 @@ def test_name_verification_does_not_approve_prototype():
     assert symbol is not None and symbol.prototype is not None
     assert symbol.prototype.confidence == "inferred"
     assert symbol.prototype.review_status == "unreviewed"
+
+
+@pytest.mark.parametrize("extra", [
+    {"evidence_kind": "guess"},
+    {"evidence_kind": "signature-bound", "confidence": "verified"},
+    {"confidence": "certain"}, {"evidence_details": []},
+    {"abi_evidence": {"return": ""}}, {"evidence_details": {"version": 1}},
+])
+def test_malformed_structured_evidence_is_rejected(extra):
+    prototype = FunctionPrototypeProposal.from_dict({"declaration": "void __cdecl f();", **extra})
+    assert prototype.validation_error
+
+
+def test_structured_evidence_survives_artifact_roundtrip(tmp_path):
+    prototype = FunctionPrototypeProposal(
+        declaration="A *__thiscall f(A *this);", confidence="inferred",
+        evidence_kind="signature-bound",
+        evidence_details={"header": "A.h:10", "version": "matched version", "address_binding": "branches"},
+        abi_evidence={"calling_convention": "ECX", "return": "all paths return this"},
+    )
+    path = tmp_path / "symbols.json"
+    record_symbol(path, "0x1234", SymbolProposal(name="A::f", prototype=prototype))
+    symbol = SymbolProposal.from_dict(load_symbols(path)[0])
+    assert asdict(prototype) == asdict(symbol.prototype)

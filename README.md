@@ -488,7 +488,7 @@ re-agent annotate --symbols symbols.json --allow-prototype-changes
 re-agent annotate --symbols symbols.json --allow-prototype-changes --write --save
 ```
 
-The first version supports qualifier-preserving `void *` to existing complete
+By default, annotation supports only qualifier-preserving `void *` to existing complete
 named struct/class pointer refinements. IDA must parse one plain prototype with
 an explicit `__cdecl`, `__stdcall`, `__fastcall` or `__thiscall` convention.
 Return types, function/argument flags, parameter counts, and ABI locations must
@@ -497,6 +497,69 @@ custom calling conventions are rejected. Types are never created or imported.
 The connected IDA server must expose `py_eval`; fixed IDAPython helpers perform
 read-only preflight and a guarded native type application. Proposal strings are
 passed as data, never as Python code. Unsupported helpers fail closed.
+
+### Inferred prototypes and ABI type corrections
+
+An inline header definition can identify a signature without stating its binary
+address. Keep such a prototype `inferred`; do not relabel it `verified` to enable
+writing. After independent checker approval, opt in for selected addresses:
+
+```sh
+re-agent annotate --symbols symbols.json --address 0x43AD00 \
+  --allow-prototype-changes --allow-inferred-prototypes \
+  --allow-abi-type-corrections
+# Review the dry-run report, then repeat with --write --save.
+```
+
+`--allow-inferred-prototypes` authorizes reviewed inference.
+`--allow-abi-type-corrections` separately permits same-width integer-to-integer
+or integer-to-data-pointer corrections, including return types. Supported new
+pointers are `void *` or existing complete named struct/class pointers.
+Both flags require `--allow-prototype-changes` and explicit `--address` selection.
+A verified proposal needing corrections still requires the correction flag.
+The flags do not override disputed/unreviewed proposals, missing evidence, stale
+snapshots, ABI mismatches, or unsupported types. Calling convention, flags,
+argument count, stack layout and argument/return locations must remain unchanged.
+Bool/enums, floats, aggregates, function pointers, arbitrary pointer casts and
+qualifier changes are excluded.
+
+Inferred proposals and all extended corrections need these additional fields
+inside `prototype`, alongside the existing declaration/evidence fields:
+
+```json
+{
+  "confidence": "inferred",
+  "evidence_kind": "signature-bound",
+  "evidence_details": {
+    "header": "Header path and lines defining the signature",
+    "version": "Evidence that the header matches the binary version",
+    "address_binding": "Specific binary branches, member offsets and call sites"
+  },
+  "abi_evidence": {
+    "calling_convention": "Evidence for registers, stack arguments and cleanup",
+    "return": "Evidence covering every returning path",
+    "arg:0": "Evidence for the explicit this parameter",
+    "arg:1": "Evidence for the changed first explicit parameter",
+    "arg:2": "Evidence supporting the changed signedness"
+  }
+}
+```
+
+Use `address-bound` when a source explicitly binds the address to the signature;
+use `signature-bound` for definitions bound to an address through binary behavior.
+Argument indices include explicit `this`. Supply ABI evidence for every changed
+type; unchanged positions need no entry. The checker reviews evidence semantics;
+field presence and ABI compatibility alone do not prove correctness.
+Old verified proposals remain supported. Old inferred proposals lacking these
+fields must be regenerated and reviewed. Unknown confidence values are rejected.
+
+Reports include individual type differences, evidence/review details and ABI
+compatibility. `needs-opt-in` means reviewed and technically eligible, with
+`required_flags` listing missing authorization; it does not certify correctness.
+Other statuses distinguish `insufficient-evidence`, `unreviewed`, `disputed`,
+`unsupported-change`, and `stale`. The latter two produce a nonzero exit.
+Normal annotation still applies eligible names/comments, so inspect those
+operations in the preview too. Neither extended flag implies comments-only mode.
 
 Dry run reports current/proposed types without applying types, comments, names,
 or saving. Write mode pins the target to an exact function entry before renaming,
