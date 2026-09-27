@@ -420,6 +420,21 @@ comment is reported as `unchanged`. Only the **non-repeatable function comment**
 is updated; address comments and repeatable function comments remain untouched.
 The server must expose `py_eval` for the fixed comment helper.
 
+Changed comments must fit a conservative **1024 UTF-8 byte** budget, including
+markers, evidence, confidence, and preserved human text. Dry-run and the write
+helper reject oversized comments before writing the comment: IDA can silently
+truncate longer comments even when both markers survive. Shorten `Evidence:`
+entries or the proposal text and keep full evidence in `symbols.json`; comments
+are never automatically shortened. Identical existing comments need no write
+and are exempt from this budget.
+
+If the helper's write or immediate readback fails, it attempts to restore the
+previous comment and verifies it by reading it back. The error reports whether
+restoration was confirmed; restoring the text does not clear IDA's modified flag.
+An independent readback failure or communication error does not trigger a blind
+restore that could overwrite a subsequent human edit. Inspect the comment and
+the report's original text before saving or retrying when recovery is uncertain.
+
 A nonempty comment without a valid unique block is reported as a conflict and
 left unchanged. This includes comments written by older versions, whose ownership
 cannot be established automatically. To migrate one, inspect the complete
