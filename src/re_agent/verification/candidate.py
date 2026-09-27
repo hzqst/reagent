@@ -12,6 +12,7 @@ from pathlib import Path
 
 from re_agent.config.schema import ValidationConfig
 from re_agent.core.models import FunctionTarget, SourceMatch, ValidationVerdict, Verdict
+from re_agent.utils.address import address_key
 from re_agent.utils.process import run_process
 
 
@@ -97,6 +98,27 @@ def create_candidate_overlay(
         if copy_project and overlay_root is not None:
             shutil.rmtree(overlay_root, ignore_errors=True)
         raise
+
+
+def discover_candidate_files(report_dir: Path, addresses: list[str]) -> list[Path]:
+    """Find candidate overlays written by earlier ``reverse`` runs for ``addresses``.
+
+    ``reverse`` names the overlay directory after the address exactly as the
+    caller typed it, so a directory can be ``0x73C5F0`` while recovery
+    canonicalizes its target to ``0x73c5f0``. Matching is therefore done on the
+    bare hexadecimal key, ignoring prefix, case and zero padding, and never
+    compares the raw strings.
+    """
+    candidates_root = report_dir / "candidates"
+    if not candidates_root.is_dir():
+        return []
+    wanted = {address_key(address) for address in addresses}
+    discovered: list[Path] = []
+    for directory in sorted(candidates_root.iterdir()):
+        if not directory.is_dir() or address_key(directory.name) not in wanted:
+            continue
+        discovered.extend(sorted(path for path in directory.glob("*.cpp") if path.is_file()))
+    return discovered
 
 
 def validate_candidate(

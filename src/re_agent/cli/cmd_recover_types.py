@@ -12,6 +12,7 @@ from re_agent.recovery.ida import IdaRecoveryClient
 from re_agent.recovery.provider import create_recovery_provider
 from re_agent.recovery.runner import run_recovery
 from re_agent.utils.address import checked_address
+from re_agent.verification.candidate import discover_candidate_files
 
 
 def cmd_recover_types(args: argparse.Namespace) -> int:
@@ -27,6 +28,16 @@ def cmd_recover_types(args: argparse.Namespace) -> int:
     evidence = []
     for path in [*args.evidence, *([config.recovery.runner_prompt_file] if config.recovery.runner_prompt_file else [])]:
         evidence.append(f"Evidence file: {path}\n{Path(path).read_text(encoding='utf-8')}")
+    # Candidate overlays from an earlier reverse run are untrusted inferences
+    # about the same functions. They are offered only in write mode: preview is
+    # a read-only investigation whose value is an unpolluted look at the IDB.
+    if args.write:
+        auto = discover_candidate_files(Path(config.output.report_dir), addresses)
+        if auto:
+            print(f"[recover-types] including {len(auto)} candidate overlay(s) as evidence", file=sys.stderr)
+            for path in auto:
+                evidence.append(f"Candidate overlay from a prior reverse run (unverified): {path}\n"
+                                f"{path.read_text(encoding='utf-8')}")
     report_path = Path(args.output) if args.output else (
         Path(config.output.report_dir) / "recovery" / f"{uuid.uuid4().hex}.json"
     )

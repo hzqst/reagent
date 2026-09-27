@@ -12,6 +12,7 @@ from re_agent.parity.source_indexer import SourceIndexer
 from re_agent.verification.candidate import (
     cleanup_candidate_overlay,
     create_candidate_overlay,
+    discover_candidate_files,
     extract_candidate_body,
     validate_candidate,
 )
@@ -232,3 +233,34 @@ def test_copy_project_builds_against_isolated_candidate(tmp_path: Path) -> None:
     overlay_root = candidate.parents[1]
     cleanup_candidate_overlay(candidate)
     assert not overlay_root.exists()
+
+
+def test_discover_candidate_files_matches_across_case_and_padding(tmp_path: Path) -> None:
+    """A reverse run keys the directory on the address as typed, so the case
+    may differ from recovery's canonical target (0x73C5F0 vs 0x73c5f0)."""
+    report_dir = tmp_path / "reports"
+    overlay = report_dir / "candidates" / "0x73C5F0"
+    overlay.mkdir(parents=True)
+    (overlay / "UnitClass_DrawAsSHP_73C5F0.cpp").write_text("void f() {}\n", encoding="utf-8")
+    padded = report_dir / "candidates" / "0x00000073c5f0"
+    padded.mkdir()
+    (padded / "dup.cpp").write_text("void f() {}\n", encoding="utf-8")
+
+    found = discover_candidate_files(report_dir, ["0x73c5f0"])
+
+    assert {path.name for path in found} == {"UnitClass_DrawAsSHP_73C5F0.cpp", "dup.cpp"}
+
+
+def test_discover_candidate_files_ignores_other_addresses_and_non_cpp(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    other = report_dir / "candidates" / "0x401000"
+    other.mkdir(parents=True)
+    (other / "other.cpp").write_text("void g() {}\n", encoding="utf-8")
+    target = report_dir / "candidates" / "0x73C5F0"
+    target.mkdir()
+    (target / ".re-agent-overlay").write_text("schema_version=1\n", encoding="utf-8")
+    (target / "notes.md").write_text("x\n", encoding="utf-8")
+    (target / "sub").mkdir()
+
+    assert discover_candidate_files(report_dir, ["0x73c5f0"]) == []
+    assert discover_candidate_files(tmp_path / "missing", ["0x73c5f0"]) == []
