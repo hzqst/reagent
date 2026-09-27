@@ -9,6 +9,19 @@ from typing import Any
 BEGIN = "[re-agent:begin]"
 END = "[re-agent:end]"
 COMMENT_MARKER = "__RE_AGENT_COMMENT__"
+COMMENT_BYTE_BUDGET = 1024
+
+
+def validate_comment_size(proposed: str) -> None:
+    """Use a conservative UTF-8 budget rather than relying on IDA's last-line retention."""
+    size = len(proposed.encode("utf-8"))
+    if size > COMMENT_BYTE_BUDGET:
+        raise RuntimeError(
+            f"Function comment is {size} UTF-8 bytes; the safe write budget is {COMMENT_BYTE_BUDGET} bytes. "
+            "IDA may silently truncate longer comments. No function comment was written. "
+            "Shorten Evidence entries or the proposal text; keep full evidence in symbols.json. "
+            "The budget includes markers and preserved human text."
+        )
 
 
 def managed_comment(current: str, body: str, *, replace: bool = False) -> str:
@@ -32,6 +45,9 @@ def comment_script(request: dict[str, Any]) -> str:
     """Encode proposal text as JSON data, never executable Python."""
     return (
         "from __future__ import annotations\nimport json\n"
+        + f"COMMENT_BYTE_BUDGET = {COMMENT_BYTE_BUDGET!r}\n"
+        + inspect.getsource(validate_comment_size)
+        + "\n"
         + inspect.getsource(_ida_comment)
         + f"\nprint({COMMENT_MARKER!r} + json.dumps(_ida_comment(json.loads({json.dumps(request)!r}))))\n"
     )
@@ -79,11 +95,33 @@ def _ida_comment(request: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(proposed, str) or "\x00" in proposed:
                 raise ValueError("Invalid proposed comment")
             if current != proposed:
-                if not funcs.set_func_cmt(function, proposed, False):
-                    raise RuntimeError("IDA rejected the function comment")
-                current = funcs.get_func_cmt(function, False) or ""
-                if current != proposed:
-                    raise RuntimeError("Function comment readback mismatch")
+                validate_comment_size(proposed)
+                previous = current
+                try:
+                    if not funcs.set_func_cmt(function, proposed, False):
+                        raise RuntimeError("IDA rejected the function comment")
+                    current = funcs.get_func_cmt(function, False) or ""
+                    if current != proposed:
+                        raise RuntimeError(
+                            "Function comment readback mismatch: IDA may have truncated or altered the comment"
+                        )
+                except Exception as write_error:
+                    # Even a rejected setter or failed read may follow a mutation.
+                    # Restore here, before returning control to the remote caller.
+                    try:
+                        if not funcs.set_func_cmt(function, previous, False):
+                            raise RuntimeError("IDA rejected restoration")
+                        if (funcs.get_func_cmt(function, False) or "") != previous:
+                            raise RuntimeError("Restored comment readback mismatch")
+                    except Exception as recovery_error:
+                        raise RuntimeError(
+                            f"{write_error}; previous comment restoration failed or could not be confirmed: "
+                            f"{recovery_error}. Inspect the function comment in IDA before saving or retrying."
+                        ) from recovery_error
+                    raise RuntimeError(
+                        f"{write_error}; previous comment restored and verified. "
+                        "IDA may still mark the database as modified."
+                    ) from write_error
         elif request["mode"] != "read":
             raise ValueError("Unknown comment operation")
         return {"ok": True, "address": hex(ea), "comment": current}

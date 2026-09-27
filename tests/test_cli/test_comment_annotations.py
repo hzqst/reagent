@@ -165,3 +165,42 @@ def test_failed_write_or_verification_is_reported_without_retry_or_save(run, fai
     assert report["save_error"]
     assert sum(mode == "apply" for mode, _ in client.calls) == 1
     assert not any(mode == "save" for mode, _ in client.calls)
+    if failure in {"stale", "mismatch"}:
+        assert client.comments["0x1000"] == "human edit"
+    assert "comment.reason" in report["save_error"]
+
+
+@pytest.mark.parametrize("write", [False, True])
+@pytest.mark.parametrize("source", ["body", "evidence", "outside"])
+def test_complete_comment_budget_is_checked_in_preflight(run, write, source):
+    client, invoke = run
+    row = {"address": "0x1000", "name": "Method", "comment": "B"}
+    if source == "body":
+        row["comment"] = "中" * 342
+    elif source == "evidence":
+        row["evidence"] = ["call site " * 110]
+    else:
+        client.comments["0x1000"] = "Human" * 210 + "\n[re-agent:begin]\nA\n[re-agent:end]"
+    previous = client.comments["0x1000"]
+    options = ["--write"] if write else []
+    code, report = invoke("--address", "1000", "--comments-only", *options, rows=[row])
+    assert code == 1
+    entry = report["entries"][0]
+    assert entry["comment_status"] == "rejected"
+    assert "UTF-8 bytes" in entry["comment"]["reason"]
+    assert "Shorten Evidence" in entry["comment"]["reason"]
+    assert previous == client.comments["0x1000"]
+    assert not any(mode == "apply" for mode, _ in client.calls)
+
+
+def test_unchanged_oversized_comment_does_not_need_a_write(run):
+    client, invoke = run
+    rows = [{"address": "0x1000", "name": "Method", "comment": "中" * 342}]
+    _, preview = invoke("--address", "1000", "--comments-only", rows=rows)
+    proposed = preview["entries"][0]["comment"]["proposed"]
+    client.comments["0x1000"] = proposed
+    code, report = invoke("--address", "1000", "--comments-only", "--write", rows=rows)
+    assert code == 0
+    assert report["entries"][0]["comment_status"] == "unchanged"
+    assert proposed == client.comments["0x1000"]
+    assert not any(mode == "apply" for mode, _ in client.calls)

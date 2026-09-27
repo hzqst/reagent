@@ -100,3 +100,82 @@ def test_helper_reports_write_and_readback_failures(ida, failure):
 def test_missing_or_invalid_response_is_failure(payload):
     with pytest.raises(RuntimeError):
         comment_result(payload)
+
+
+@pytest.mark.parametrize("proposed", ["A" * 1025, "中" * 342], ids=["ascii", "utf8"])
+def test_oversized_write_is_rejected_without_mutation(ida, proposed):
+    with pytest.raises(RuntimeError, match="UTF-8 bytes.*1024"):
+        execute({"mode": "apply", "address": "0x1000", "expected": "A", "proposed": proposed})
+    assert ida["writes"] == []
+    assert ida["comment"] == "A"
+
+
+def test_exact_byte_budget_and_unchanged_oversized_comment(ida):
+    proposed = "中" * 341 + "A"
+    assert proposed == execute({"mode": "apply", "address": "0x1000", "expected": "A",
+                                "proposed": proposed})["comment"]
+    ida["comment"] = "A" * 1025
+    ida["writes"].clear()
+    assert ida["comment"] == execute({"mode": "apply", "address": "0x1000", "expected": ida["comment"],
+                                      "proposed": ida["comment"]})["comment"]
+    assert ida["writes"] == []
+
+
+@pytest.mark.parametrize("previous", ["", "Human comment"])
+@pytest.mark.parametrize("failure", ["truncate", "reject", "raise", "read"])
+def test_failed_write_restores_and_verifies_previous_comment(ida, monkeypatch, previous, failure):
+    ida["comment"] = previous
+    funcs = sys.modules["ida_funcs"]
+    original_set = funcs.set_func_cmt
+    original_get = funcs.get_func_cmt
+    proposed = managed_comment("", "important evidence\n" * 10)
+
+    def set_comment(f, text, repeatable):
+        result = original_set(f, text, repeatable)
+        if len(ida["writes"]) == 1:
+            # Model a smaller backend budget: both markers survive the lost middle.
+            ida["comment"] = text[:32] + "\n" + text.split("\n")[-1]
+            if failure == "reject":
+                return False
+            if failure == "raise":
+                raise RuntimeError("setter failed after mutation")
+        return result
+
+    def get_comment(f, repeatable):
+        if failure == "read" and len(ida["writes"]) == 1:
+            raise RuntimeError("read failed after mutation")
+        return original_get(f, repeatable)
+
+    monkeypatch.setattr(funcs, "set_func_cmt", set_comment)
+    monkeypatch.setattr(funcs, "get_func_cmt", get_comment)
+    with pytest.raises(RuntimeError, match="previous comment restored and verified"):
+        execute({"mode": "apply", "address": "0x1000", "expected": previous, "proposed": proposed})
+    assert previous == ida["comment"]
+    assert [(0x1000, proposed, False), (0x1000, previous, False)] == ida["writes"]
+
+
+@pytest.mark.parametrize("recovery", ["reject", "mismatch", "raise", "read"])
+def test_failed_recovery_preserves_both_errors(ida, monkeypatch, recovery):
+    funcs = sys.modules["ida_funcs"]
+    original_set = funcs.set_func_cmt
+
+    def set_comment(f, text, repeatable):
+        result = original_set(f, text, repeatable)
+        ida["comment"] = "unexpected"
+        if len(ida["writes"]) == 2:
+            if recovery == "reject":
+                return False
+            if recovery == "raise":
+                raise RuntimeError("restore setter failed")
+        return result
+
+    def get_comment(f, repeatable):
+        if recovery == "read" and len(ida["writes"]) == 2:
+            raise RuntimeError("restore read failed")
+        return ida["comment"]
+
+    monkeypatch.setattr(funcs, "set_func_cmt", set_comment)
+    monkeypatch.setattr(funcs, "get_func_cmt", get_comment)
+    with pytest.raises(RuntimeError, match="readback mismatch.*restoration failed or could not be confirmed"):
+        execute({"mode": "apply", "address": "0x1000", "expected": "A", "proposed": "B"})
+    assert len(ida["writes"]) == 2

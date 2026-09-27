@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from re_agent.backend.ida_comments import managed_comment
+from re_agent.backend.ida_comments import managed_comment, validate_comment_size
 from re_agent.backend.ida_prototype import PrototypeOperationError
 from re_agent.backend.ida_write import (
     IdaWriteClient,
@@ -128,7 +128,11 @@ def cmd_annotate(args: argparse.Namespace) -> int:
             if any(e.prototype_report.get("status") == "recovery-failed" for e in entries):
                 save_error = "Save suppressed: a function type could not be restored"
             elif any(e.comment_status == "failed" for e in entries):
-                save_error = "Save suppressed: a function comment write could not be confirmed; inspect the IDB"
+                save_error = (
+                    "Save suppressed: a function comment operation failed; see the entry's comment.reason "
+                    "for the cause and restoration outcome. If restoration is not confirmed, inspect the "
+                    "function comment in IDA before saving or retrying."
+                )
             else:
                 try:
                     client.save()
@@ -158,6 +162,8 @@ def _plan_comment(client: IdaWriteClient, entry: _Entry, *, replace: bool) -> No
         report.update(address=snapshot["address"], current=snapshot["comment"])
         proposed = managed_comment(snapshot["comment"], _comment_text(entry.proposal), replace=replace)
         report["proposed"] = proposed
+        if proposed != snapshot["comment"]:
+            validate_comment_size(proposed)
         entry.comment_status = "unchanged" if proposed == snapshot["comment"] else "would-apply"
     except ValueError as exc:
         entry.comment_status = "conflict"
@@ -177,7 +183,11 @@ def _apply_comment(client: IdaWriteClient, entry: _Entry) -> None:
         after = client.comment_operation("read", report["address"])
         report["after"] = after["comment"]
         if after["comment"] != report["proposed"]:
-            raise RuntimeError("Independent function comment readback mismatch")
+            raise RuntimeError(
+                "Independent function comment readback mismatch; current contents differ from the proposal. "
+                "No automatic restoration was attempted because a subsequent human edit may exist; "
+                "inspect the function comment in IDA before saving or retrying."
+            )
         entry.comment_status = "applied"
     except (RuntimeError, OSError, ValueError, KeyError) as exc:
         # Never retry an ambiguous write or overwrite a subsequent human edit.
