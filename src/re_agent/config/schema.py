@@ -99,6 +99,14 @@ class AgentModelsConfig:
 
 
 @dataclass
+class RecoveryConfig(LLMConfig):
+    """Independent model and execution budget for backend-specific recovery."""
+
+    max_steps: int = 40
+    max_result_chars: int = 24000
+
+
+@dataclass
 class BackendConfig:
     """Decompiler backend configuration."""
 
@@ -186,6 +194,7 @@ class ReAgentConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     agents: AgentModelsConfig = field(default_factory=AgentModelsConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
+    recovery: RecoveryConfig | None = None
 
     @classmethod
     def create_default(cls) -> ReAgentConfig:
