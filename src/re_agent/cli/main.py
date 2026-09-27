@@ -77,6 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     recovery_p.add_argument("--write", action="store_true",
                             help="Permit IDA type recovery; default is read-only investigation")
     recovery_p.add_argument("--save", action="store_true", help="Save after successful independent type readback")
+    recovery_p.add_argument(
+        "--include-candidates", action="store_true",
+        help="Inject candidate overlays from earlier reverse runs for the selected addresses as evidence",
+    )
     recovery_p.add_argument("--output", help="Recovery journal path (default: report_dir/recovery/<run-id>.json)")
 
     # annotate

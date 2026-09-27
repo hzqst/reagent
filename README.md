@@ -672,13 +672,15 @@ re-agent recover-types --address 0x437A10 --evidence blitter-analysis.md --write
 ```
 
 Repeat `--address` for the write scope and `--evidence` for additional files.
-`--objective` narrows the recovery task. In `--write` mode, recovery also
-auto-discovers candidate overlays that earlier `reverse` runs wrote to
+`--objective` narrows the recovery task. `--include-candidates` discovers
+candidate overlays that earlier `reverse` runs wrote to
 `report_dir/candidates/<address>/` for the selected addresses and injects them
-as evidence, labelled unverified. This gives the type agent the earlier run's
+as evidence, labelled unverified, giving the type agent the earlier run's
 inferred class/vtable layout without a manual `--evidence` copy; IDA readback
-remains the source of truth. Preview is a read-only look at the IDB and does not
-load candidates. Related functions may be read; the agent
+remains the source of truth. It is opt-in and independent of `--write`, so
+preview can use it to check a prior inference and a write run can decline it by
+default. Requesting it when no overlay matches the selected addresses is an
+error rather than a silent no-op. Related functions may be read; the agent
 is instructed to modify only selected functions and newly created types, reuse
 equivalent existing types, and report conflicting shared types or required
 out-of-scope changes as unresolved. Do not run concurrent editors/agents on the
