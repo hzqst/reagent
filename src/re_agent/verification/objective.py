@@ -25,7 +25,7 @@ def verify_candidate(
             findings=["Candidate code is empty"],
         )
 
-    source_body = strip_comments(_extract_body(code))
+    source_body = strip_comments(_extract_candidate_body(code))
     source_call_count, _, _ = count_calls(source_body)
     source_flow_count = count_control_flow(source_body)
 
@@ -143,6 +143,24 @@ def verify_candidate(
         summary="No structural mismatches found",
         findings=[],
     )
+
+
+def _extract_candidate_body(code: str) -> str:
+    """Return the sole top-level function body, ignoring leading declarations.
+
+    Unlike the decompiler output (which ``_extract_body`` handles), a candidate
+    may legitimately define helper structs before the function.  Counting calls
+    and control flow over the whole file would inflate the candidate's counts
+    and hide genuine shortfalls, so the candidate side uses the same locator as
+    the candidate overlay.
+    """
+    from re_agent.parity.source_indexer import SourceIndexer
+
+    definitions, _ = SourceIndexer._locate_function_definitions(code)
+    if not definitions:
+        return code
+    open_brace, close_brace = definitions[0]
+    return code[open_brace : close_brace + 1]
 
 
 def _extract_body(text: str) -> str:

@@ -66,6 +66,46 @@ def test_candidate_body_rejects_code_with_no_body() -> None:
         extract_candidate_body("void Foo();")
 
 
+def test_candidate_body_accepts_leading_type_definitions() -> None:
+    """Regression for #13: leading structs/unions were mistaken for the body."""
+    code = (
+        "// ... file header comment ...\n"
+        "#include <cstdint>\n"
+        "\n"
+        "struct Matrix3D   { float row[3][4]; };\n"
+        "struct DirStruct  { unsigned short Raw; unsigned short Padding; };\n"
+        "class  FacingClass\n"
+        "{\n"
+        "public:\n"
+        "    DirStruct   DesiredFacing;\n"
+        "    unsigned char RotationTimer[0x0C];\n"
+        "};\n"
+        "union VoxelIndexKey { int Raw; };\n"
+        "class  ILocomotion;\n"
+        "\n"
+        "Matrix3D *__stdcall Draw_Matrix(ILocomotion *this_, Matrix3D *sret, VoxelIndexKey *pIndex)\n"
+        "{\n"
+        "    if (pIndex->Raw) { Foo(); }\n"
+        "    return sret;\n"
+        "}\n"
+    )
+
+    body = extract_candidate_body(code)
+
+    assert body.startswith("{\n    if (pIndex->Raw)")
+    assert body.endswith("}")
+
+
+def test_candidate_body_accepts_elaborated_struct_return_type() -> None:
+    """``struct`` in the return type is not a wrapper around the function."""
+    assert extract_candidate_body("struct M *__thiscall C::F(C *this) { return 0; }\n") == "{ return 0; }"
+
+
+def test_candidate_body_still_rejects_union_wrapper() -> None:
+    with pytest.raises(ValueError, match="without namespace/class wrappers"):
+        extract_candidate_body("union S { void Foo() {} };")
+
+
 def test_candidate_overlay_replaces_only_function_body(tmp_path: Path) -> None:
     source_root = tmp_path / "src"
     source_root.mkdir()
@@ -103,6 +143,20 @@ def test_candidate_overlay_sanitizes_qualified_class_name(tmp_path: Path) -> Non
     assert candidate.exists()
     assert "::" not in candidate.name
     assert candidate.read_text(encoding="utf-8") == "void Render() { NewCall(); }\n"
+
+
+def test_candidate_overlay_rejects_invalid_candidate_before_writing(tmp_path: Path) -> None:
+    """A candidate rejected for structure must not leave an overlay file behind."""
+    target = FunctionTarget("0x100", "C", "F")
+    with pytest.raises(ValueError, match="exactly one complete function body"):
+        create_candidate_overlay(
+            target,
+            "void F() { G(); }\nvoid H() { I(); }\n",
+            None,
+            tmp_path / "src",
+            tmp_path / "reports",
+        )
+    assert not (tmp_path / "reports" / "candidates" / "0x100").exists()
 
 
 def test_candidate_overlay_sanitizes_template_and_operator_names(tmp_path: Path) -> None:
