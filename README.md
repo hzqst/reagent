@@ -270,6 +270,29 @@ llm:
 Codex uses the authenticated local `codex exec` command. CLI-provider
 `max_tokens` values are planning allowances, not hard output limits.
 
+The provider selects `--profile reagent_runner` on both opening and resumed
+turns. With Codex CLI 0.134.0 or later, copy
+[.codex/reagent_runner.config.toml](.codex/reagent_runner.config.toml) to
+`$CODEX_HOME/reagent_runner.config.toml` (default: `~/.codex/`). The profile
+selects `REAGENT_RUNNER.md` from the project directory as fallback instructions.
+A missing profile must be installed before running the provider.
+
+For separate interactive instructions, put this at the top level of your
+**user** `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`):
+
+```toml
+project_doc_fallback_filenames = ["CLAUDE.md"]
+```
+
+Keep interactive project guidance in `CLAUDE.md` and runner guidance in
+`REAGENT_RUNNER.md`. Migrate project `AGENTS.md` / `AGENTS.override.md` files:
+those names take precedence over fallback files. Use bare fallback filenames,
+not paths such as `.claude/REAGENT_RUNNER.md`. Do not set the fallback list in
+project `.codex/config.toml`, whose values override the selected user profile.
+Global Codex instructions and instructions from ancestor directories still
+apply; this setup separates project guidance, not all inherited configuration.
+The provider continues to enforce a read-only sandbox.
+
 ### Pi CLI
 
 ```yaml
@@ -299,7 +322,11 @@ llm:
   pi_tools: "read,grep,ls"   # "" disables every tool
 ```
 
-The path is resolved against the working directory. Codex still loads its
+The path is resolved against the working directory. For Codex, an explicit
+`runner_prompt_file` disables project document discovery, including the profile
+fallback, and adds the file contents as developer instructions. Without this
+option, the `reagent_runner` profile discovers `REAGENT_RUNNER.md`.
+Codex still loads its
 global `$CODEX_HOME/AGENTS.md`; only the project document is suppressed.
 
 Omit `agents.reverser` or `agents.checker` to reuse the top-level `llm`

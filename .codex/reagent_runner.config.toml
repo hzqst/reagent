@@ -1,0 +1,5 @@
+# Install as $CODEX_HOME/reagent_runner.config.toml (default: ~/.codex/).
+# Selected by the Codex provider with --profile reagent_runner.
+# Projects must not contain AGENTS.md / AGENTS.override.md in the discovery path
+# or override project_doc_fallback_filenames in their .codex/config.toml.
+project_doc_fallback_filenames = ["REAGENT_RUNNER.md"]

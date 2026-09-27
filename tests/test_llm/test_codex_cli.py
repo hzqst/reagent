@@ -81,6 +81,7 @@ def test_runner_prompt_file_suppresses_project_doc(tmp_path, monkeypatch):
     )
 
     args = calls[0]
+    assert args[1:4] == ["--profile", "reagent_runner", "exec"]
     assert "project_doc_max_bytes=0" in args
     instruction_args = [arg for arg in args if arg.startswith("developer_instructions=")]
     assert len(instruction_args) == 1
@@ -112,6 +113,7 @@ def test_runner_prompt_file_applies_to_thread_resume(tmp_path, monkeypatch):
 
     assert "resume" in calls[1]
     for args in calls:
+        assert args[1:4] == ["--profile", "reagent_runner", "exec"]
         assert "project_doc_max_bytes=0" in args
         instruction_args = [arg for arg in args if arg.startswith("developer_instructions=")]
         assert json.loads(instruction_args[0].split("=", 1)[1]) == "runner conventions"
@@ -128,5 +130,6 @@ def test_runner_prompt_file_is_absent_by_default(monkeypatch):
     monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
     CodexCLIProvider().send([Message(role="user", content="x")])
 
+    assert calls[0][1:4] == ["--profile", "reagent_runner", "exec"]
     assert "project_doc_max_bytes=0" not in calls[0]
     assert not [arg for arg in calls[0] if arg.startswith("developer_instructions=")]

@@ -12,6 +12,7 @@ from typing import Any
 from re_agent.llm.protocol import Message
 
 SANDBOX_MODE = "read-only"
+RUNNER_PROFILE = "reagent_runner"
 
 
 @dataclass
@@ -42,7 +43,7 @@ class CodexCLIProvider:
         self._model = model
         self._timeout_s = timeout_s
         self._codex_bin = codex_bin
-        # Read once: the config loader already refuses a missing file, and the
+        # Read once: the provider factory already refuses a missing file, and the
         # contents become an argv element on every invocation.
         self._runner_prompt = (
             Path(runner_prompt_file).read_text(encoding="utf-8")
@@ -97,6 +98,8 @@ class CodexCLIProvider:
     def _exec_args(self, model: Any) -> list[str]:
         return [
             self._codex_bin,
+            "--profile",
+            RUNNER_PROFILE,
             "exec",
             "-s",
             SANDBOX_MODE,
@@ -114,6 +117,8 @@ class CodexCLIProvider:
         # policy is re-asserted through a config override instead.
         return [
             self._codex_bin,
+            "--profile",
+            RUNNER_PROFILE,
             "exec",
             "resume",
             thread_id,
@@ -134,7 +139,7 @@ class CodexCLIProvider:
         cannot do it: codex consults that list only in a directory where
         ``AGENTS.md`` is missing, and only for bare filenames — it adds a
         document rather than replacing one (measured on codex-cli 0.157.1).
-        ``developer_instructions`` replaces codex's base instructions; the JSON
+        ``developer_instructions`` adds runner instructions to the session; JSON
         encoding keeps the multi-line file contents a single TOML-parseable
         argv element.
         """

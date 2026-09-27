@@ -29,13 +29,13 @@ def test_resume_reuses_codex_session(monkeypatch):
 
     assert provider.resume(conversation, "request") == "answer"
     opening_args, opening_prompt = calls[0]
-    assert opening_args[1] == "exec"
+    assert opening_args[1:4] == ["--profile", "reagent_runner", "exec"]
     assert "resume" not in opening_args
     assert opening_prompt == "[SYSTEM]\nsystem\n\n[USER]\nrequest"
 
     assert provider.resume(conversation, "next") == "next answer"
     follow_args, follow_prompt = calls[1]
-    assert follow_args[1:4] == ["exec", "resume", "thread-1"]
+    assert follow_args[1:6] == ["--profile", "reagent_runner", "exec", "resume", "thread-1"]
     assert follow_prompt == "next"
 
 
