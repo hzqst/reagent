@@ -55,6 +55,14 @@ llm:
 # A CLI role may instead use the Pi coding agent: provider: "pi". An empty model
 # defers to Pi's own configured default, and effort maps to Pi's thinking level.
 
+# Independent IDA recovery agent; never inherits reverser/checker configuration.
+# Requires backend.type: ida-mcp. Preview calls the model but cannot write types.
+# recovery:
+#   provider: "claude-cli"
+#   model: "sonnet"
+#   max_steps: 40
+#   timeout_s: 1800
+
 backend:
   type: "ghidra-bridge"
   cli_path: "ghidra-bridge"

@@ -17,6 +17,7 @@ from re_agent.config.schema import (
     ParityConfig,
     ProjectProfile,
     ReAgentConfig,
+    RecoveryConfig,
     ValidationConfig,
 )
 
@@ -180,6 +181,9 @@ def _build_validation_config(data: dict[str, Any]) -> ValidationConfig:
 
 def _build_config(raw: dict[str, Any]) -> ReAgentConfig:
     """Build a ReAgentConfig from a raw dict."""
+    recovery = raw.get("recovery")
+    if recovery is not None and not isinstance(recovery, dict):
+        raise ValueError("recovery must be a mapping")
     return ReAgentConfig(
         project_profile=_build_project_profile(raw.get("project_profile", {})),
         llm=_build_llm_config(raw.get("llm", {})),
@@ -189,6 +193,7 @@ def _build_config(raw: dict[str, Any]) -> ReAgentConfig:
         orchestrator=_build_orchestrator_config(raw.get("orchestrator", {})),
         validation=_build_validation_config(raw.get("validation", {})),
         output=_build_output_config(raw.get("output", {})),
+        recovery=_build_with_coercion(RecoveryConfig, recovery) if recovery is not None else None,
     )
 
 
@@ -241,6 +246,11 @@ def load_config(
 
 
 def validate_config(config: ReAgentConfig) -> None:
+    if config.recovery is not None:
+        for name in ("max_steps", "max_result_chars", "timeout_s", "max_tokens"):
+            value = getattr(config.recovery, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"recovery.{name} must be a positive integer")
     for name in (
         "max_review_rounds",
         "max_functions_per_class",

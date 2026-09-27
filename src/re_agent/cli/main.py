@@ -67,6 +67,18 @@ def build_parser() -> argparse.ArgumentParser:
     estimate_p.add_argument("--class", dest="class_name", help="Class name to estimate")
     estimate_p.add_argument("--limit", type=int, default=50, help="Maximum functions to inspect")
 
+    recovery_p = sub.add_parser("recover-types", help="Investigate and recover IDA types with an independent agent")
+    recovery_p.add_argument("--address", action="append", required=True, help="Target function entry (repeatable)")
+    recovery_p.add_argument("--evidence", action="append", default=[], help="Read additional evidence from a file")
+    recovery_p.add_argument(
+        "--objective", default="Recover evidence-supported class pointers, vtable pointers and virtual calls.",
+        help="Recovery objective within the selected functions",
+    )
+    recovery_p.add_argument("--write", action="store_true",
+                            help="Permit IDA type recovery; default is read-only investigation")
+    recovery_p.add_argument("--save", action="store_true", help="Save after successful independent type readback")
+    recovery_p.add_argument("--output", help="Recovery journal path (default: report_dir/recovery/<run-id>.json)")
+
     # annotate
     ann_p = sub.add_parser("annotate", help="Apply symbol proposals to an IDA database")
     ann_p.add_argument("--address", action="append", help="Select a hexadecimal address (repeatable)")
@@ -169,6 +181,11 @@ def _main(argv: list[str] | None = None) -> int:
         from re_agent.cli.cmd_annotate import cmd_annotate
 
         return cmd_annotate(args)
+
+    if args.command == "recover-types":
+        from re_agent.cli.cmd_recover_types import cmd_recover_types
+
+        return cmd_recover_types(args)
 
     parser.print_help()
     return 1

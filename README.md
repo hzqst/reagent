@@ -400,6 +400,8 @@ Global options must precede the subcommand, for example
 | `re-agent estimate --class CLASS --limit N` | Estimate a class batch |
 | `re-agent annotate --symbols symbols.json` | Preview IDA name/comment proposals |
 | `re-agent annotate --symbols symbols.json --allow-prototype-changes --write --save` | Apply reviewed function type refinements and save the IDB |
+| `re-agent recover-types --address ADDR` | Investigate IDA object/vtable types with an independent agent |
+| `re-agent recover-types --address ADDR --write --save` | Recover types and save after independent readback |
 
 Use `re-agent <command> --help` for the exact option list.
 
@@ -601,6 +603,93 @@ For live acceptance, use a disposable IDB with an existing class type and a
 `void *this` function: preview, apply, independently query/decompile the target,
 then save and reopen the IDB to check persistence. The mocked tests exercise the
 pipeline and failures but do not replace that integration check.
+
+## Recover class pointers and virtual calls in IDA
+
+`recover-types` is an interactive, IDA-specific agent. It investigates object
+sources and virtual calls, creates missing class/vtable types, applies function
+and local-variable types, then re-decompiles to decide the next step. It does
+not consume or extend `SymbolProposal`; `annotate` remains the existing proposal
+application workflow. Other backends currently report this command as unsupported.
+
+Configure its model independently and reuse the existing IDA connection:
+
+```yaml
+backend:
+  type: ida-mcp
+  url: http://127.0.0.1:13337/mcp
+  timeout_s: 120
+
+recovery:
+  provider: claude-cli  # Also: claude, openai, openai-compat, codex, pi
+  model: sonnet
+  max_steps: 40
+  max_result_chars: 24000
+  timeout_s: 1800
+```
+
+The `recovery` block accepts the model/provider fields of `llm`, but does not
+inherit `llm` or `agents` settings. Set the provider and model appropriate for
+your account. Native CLI tools are disabled for this role: the agent returns
+tool requests and the recovery loop dispatches them to the configured IDA MCP
+endpoint, recording every request and result. Native Codex MCP connections and
+shell tools are disabled on opening and resumed turns. `runner_prompt_file`, if
+set, is supplied as additional context; it does not replace the recovery policy.
+
+The IDA server must expose `py_eval` for fixed type readback helpers and
+`idb_save` for backups/saving. A dedicated recovery local-type tool writes saved
+Hex-Rays settings using the variable's location, definition address and expected
+current type. It also works for automatic locals without prior user settings,
+which some MCP `set_type(kind=local)` implementations cannot handle.
+
+```sh
+# Read-only investigation; DOES call the model. Addresses must be function entries.
+re-agent recover-types --address 0x437A10
+
+# Evidence can be a source header, analysis note, or exported evidence packet.
+re-agent recover-types --address 0x437A10 --evidence blitter-analysis.md --write --save
+```
+
+Repeat `--address` for the write scope and `--evidence` for additional files.
+`--objective` narrows the recovery task. Related functions may be read; the agent
+is instructed to modify only selected functions and newly created types, reuse
+equivalent existing types, and report conflicting shared types or required
+out-of-scope changes as unresolved. Do not run concurrent editors/agents on the
+same IDB during a recovery run. Type changes can affect caller decompilation even
+when callers are not explicitly edited.
+
+Preview exposes only a fixed read-tool allowlist. Model-generated Python and
+all write tools are unavailable; a fixed, read-only IDAPython helper captures
+the initial function/local types. A preview is an investigation plan, not an
+exact patch: subsequent decompilation can reveal additional work.
+
+`--write` enables IDA type-editing tools and **trusted model-authored `py_eval`**.
+The latter has the privileges of the IDA process: scope and no-save instructions
+are agent policy, not a sandbox for arbitrary Python. This mode is intentionally
+more permissive than `annotate`. Before the first potentially mutating tool,
+the host creates an IDB backup alongside the active database on the **IDA host**.
+The report records its path. Failure to create the backup prevents writes.
+
+Reports default to `report_dir/recovery/<run-id>.json`; `--output` selects a path.
+They contain initial/final decompilation, tool events persisted before dispatch,
+backup location, agent conclusions, independent type checks and unresolved work.
+`verified` means that the agent finished without reported unresolved items and
+its type assertions matched fresh IDA readback; it is not proof of semantic
+equivalence or discovery of every virtual call. The checks include at least a
+selected function's local-variable or prototype assertion. Review slot offsets,
+signatures and the resulting calls as well as the summary.
+
+`--save` requires `--write` and is performed only after successful readback with
+no unresolved items. A write error/timeout stops further writes and suppresses
+automatic saving; the operation may already have partially changed the IDB.
+Budget exhaustion, interrupted runs and failed verification also leave a journal
+and return a nonzero exit status. Backups provide manual recovery, not automatic
+transactional rollback. Unsaved changes remain in the running IDA instance.
+Re-run against the current state after reviewing any partial changes; there is
+no blind replay of a previous run's tool requests.
+
+For a reproducible live acceptance exercise, see
+[`examples/ida_type_recovery`](examples/ida_type_recovery/README.md).
 
 ## Working with function groups
 
