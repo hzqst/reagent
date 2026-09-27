@@ -108,6 +108,42 @@ def test_unknown_validation_blocks_acceptance_by_default(tmp_path: Path) -> None
     assert result.success is False
 
 
+def test_candidate_with_leading_types_succeeds_when_checker_passes(tmp_path: Path) -> None:
+    """Regression for #13: a PASS candidate with leading types is not rejected."""
+    config = ReAgentConfig.create_default()
+    config.project_profile.source_root = str(tmp_path / "empty")
+    config.output.report_dir = str(tmp_path / "reports")
+    config.output.log_dir = str(tmp_path / "logs")
+    config.orchestrator.max_review_rounds = 1
+    config.orchestrator.investigation_enabled = False
+    config.orchestrator.objective_verifier_enabled = False
+    config.parity.enabled = False
+    config.validation.enabled = False
+
+    code = (
+        "```cpp\n"
+        "struct M { float row[3][4]; };\n"
+        "M *__stdcall C::F(void *this_, M *sret) { return sret; }\n"
+        "```\n"
+        "REVERSED_FUNCTION: C::F (0x100)"
+    )
+    result = reverse_single(
+        FunctionTarget("0x100", "C", "F"),
+        config,
+        StubBackend(),
+        _LLM(code),
+        checker_llm=_LLM(
+            "VERDICT: PASS\nSUMMARY: Looks right\nISSUES:\n- none\n"
+            "FIX_INSTRUCTIONS:\n- none"
+        ),
+    )
+
+    assert result.success is True
+    assert result.validation_verdict is not None
+    assert result.validation_verdict.overlay_file is not None
+    assert Path(result.validation_verdict.overlay_file).exists()
+
+
 def test_explicitly_disabled_validation_does_not_block(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()

@@ -15,25 +15,38 @@ from re_agent.core.models import FunctionTarget, SourceMatch, ValidationVerdict,
 from re_agent.utils.address import address_key
 from re_agent.utils.process import run_process
 
+# A top-level brace block whose head looks like a ``namespace`` or ``extern "C"``
+# wrapper.  The model is not allowed to wrap the function, so these must be
+# reported as a distinct error instead of being mistaken for a type definition.
+_WRAPPER_HEAD_RE = re.compile(r"\bnamespace\b|^\s*extern\s*$")
+
 
 def extract_candidate_body(code: str) -> str:
-    """Extract the outer C++ body from generated code.
+    """Extract the single top-level function body from generated code.
 
-    The first brace is located through the comment- and string-aware scanner: a
-    model that sketches a struct in a leading comment (``// struct S { ... };``)
-    would otherwise have that brace taken for the function body's, and the
-    candidate rejected as holding more than one body.
+    Leading declarations (``struct`` / ``class`` / ``union`` / ``enum``,
+    initializer lists, lambdas) are legal and skipped; the body of the sole
+    top-level function definition is returned.  Trailing code with a second
+    definition is still rejected, as are namespace/class wrappers around the
+    function.
     """
     from re_agent.parity.source_indexer import SourceIndexer
 
-    if code.lstrip().startswith(("namespace ", "class ", "struct ")):
+    definitions, block_heads = SourceIndexer._locate_function_definitions(code)
+    if any(_WRAPPER_HEAD_RE.search(head) for head in block_heads):
         raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
-    open_brace = SourceIndexer._find_first_code_brace(code)
-    if open_brace is None:
+    if not definitions:
+        if block_heads:
+            raise ValueError(
+                "Candidate must contain exactly one function, without namespace/class wrappers "
+                "(only type or initializer blocks were found)"
+            )
         raise ValueError("Candidate has no function body")
-    close_brace = SourceIndexer._find_matching_brace(code, open_brace)
-    if close_brace is None or code[close_brace + 1 :].strip().strip(";"):
-        raise ValueError("Candidate must contain exactly one complete function body")
+    if len(definitions) > 1:
+        raise ValueError(
+            f"Candidate must contain exactly one complete function body; found {len(definitions)} definitions"
+        )
+    open_brace, close_brace = definitions[0]
     return code[open_brace : close_brace + 1].strip()
 
 
@@ -47,6 +60,7 @@ def create_candidate_overlay(
     copy_project: bool = False,
 ) -> Path:
     """Write a source overlay with the original function body replaced."""
+    extract_candidate_body(code)
     safe_address = _sanitize_path_component(target.address)
     overlay_root: Path | None = None
     try:

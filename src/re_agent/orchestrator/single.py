@@ -140,6 +140,7 @@ def validate_result(
             original_source = indexer.find_by_address(target.address)
             if original_source is None:
                 original_source = matches[0] if matches else indexer.find(target.class_name, target.function_name)
+            candidate_body = extract_candidate_body(result.code)
             candidate_file = create_candidate_overlay(
                 target,
                 result.code,
@@ -149,7 +150,6 @@ def validate_result(
                 project_root=Path(config.validation.project_root),
                 copy_project=config.validation.copy_project,
             )
-            candidate_body = extract_candidate_body(result.code)
             source = indexer.analyze_body(
                 str(candidate_file),
                 original_source.line if original_source else 1,

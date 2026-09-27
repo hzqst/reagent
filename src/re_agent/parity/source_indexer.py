@@ -19,6 +19,16 @@ from re_agent.utils.text import (
 
 FUNC_TOKEN_RE = re.compile(r"([A-Za-z_~][A-Za-z0-9_]*)::([A-Za-z_~][A-Za-z0-9_]*)\s*\(")
 
+# Preprocessor lines, including ``#define`` bodies continued with a trailing
+# backslash, are blanked out of the candidate code mask so that braces inside a
+# macro are never mistaken for a function or type body.
+_PREPROCESSOR_LINE_RE = re.compile(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", re.MULTILINE)
+
+# A ``]`` immediately before a top-level ``(`` marks a lambda unless it is the
+# ``[...]`` of a subscript/new[] operator; the latter is still a function
+# definition and must not be skipped.
+_SUBSCRIPT_OPERATOR_RE = re.compile(r"\boperator\s*(?:new|delete)?\s*\[\s*\]$")
+
 
 class SourceIndexer:
     """Indexes C++ source files and locates function bodies by class::function name.
@@ -150,12 +160,69 @@ class SourceIndexer:
             i += 1
 
     @staticmethod
-    def _find_first_code_brace(text: str) -> int | None:
-        """Return the offset of the first brace that is not inside a comment."""
+    def _code_mask(text: str) -> str:
+        """Return *text* with comments, literals and preprocessor lines blanked.
+
+        Code characters (including every brace, paren and ``;``) stay at their
+        original offsets; everything else becomes whitespace.  Callers can
+        therefore scan the mask and slice the real *text* with the same offsets.
+        """
+        masked = ["\n" if ch == "\n" else " " for ch in text]
         for i in SourceIndexer._code_offsets(text):
-            if text[i] == "{":
-                return i
-        return None
+            masked[i] = text[i]
+        return _PREPROCESSOR_LINE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), "".join(masked))
+
+    @staticmethod
+    def _locate_function_definitions(code: str) -> tuple[list[tuple[int, int]], list[str]]:
+        """Locate every top-level function definition in *code*.
+
+        Returns a list of ``(open_brace, close_brace)`` offset pairs for the
+        definitions (skipping structs, classes, unions, arrays and lambdas) and
+        the declaration heads that precede each skipped top-level brace block.
+        Leading type definitions are legal; callers decide how to report them.
+
+        Raises:
+            ValueError: If a function body is unterminated, or if any top-level
+                brace block is itself unterminated.
+        """
+        masked = SourceIndexer._code_mask(code)
+        functions: list[tuple[int, int]] = []
+        block_heads: list[str] = []
+        head_start = 0
+        i = 0
+        n = len(masked)
+        while i < n:
+            ch = masked[i]
+            if ch == "(":
+                before = masked[:i].rstrip()
+                is_lambda = before.endswith("]") and not _SUBSCRIPT_OPERATOR_RE.search(before)
+                if is_lambda:
+                    close_paren = SourceIndexer._find_matching_paren(masked, i)
+                    i = n if close_paren is None else close_paren + 1
+                    continue
+                open_brace = SourceIndexer._find_function_body_open(masked, i, "")
+                if open_brace is None:
+                    close_paren = SourceIndexer._find_matching_paren(masked, i)
+                    i = n if close_paren is None else close_paren + 1
+                    continue
+                close_brace = SourceIndexer._find_matching_brace(masked, open_brace)
+                if close_brace is None:
+                    raise ValueError("Candidate must contain exactly one complete function body; "
+                                     "the function body is unterminated")
+                functions.append((open_brace, close_brace))
+                i = head_start = close_brace + 1
+                continue
+            if ch == "{":
+                close_brace = SourceIndexer._find_matching_brace(masked, i)
+                if close_brace is None:
+                    raise ValueError("Candidate has an unterminated brace block")
+                block_heads.append(masked[head_start:i].strip())
+                i = head_start = close_brace + 1
+                continue
+            if ch == ";":
+                head_start = i + 1
+            i += 1
+        return functions, block_heads
 
     @staticmethod
     def _find_matching_brace(text: str, open_brace_idx: int) -> int | None:
@@ -333,38 +400,39 @@ class SourceIndexer:
             return False
         return not (end < len(text) and (text[end].isalnum() or text[end] == "_"))
 
-    def _find_function_body_open(self, txt: str, fn_idx: int, fn_name: str) -> int | None:
-        paren_open = self._skip_ws(txt, fn_idx + len(fn_name))
+    @staticmethod
+    def _find_function_body_open(txt: str, fn_idx: int, fn_name: str) -> int | None:
+        paren_open = SourceIndexer._skip_ws(txt, fn_idx + len(fn_name))
         if paren_open >= len(txt) or txt[paren_open] != "(":
             return None
-        paren_close = self._find_matching_paren(txt, paren_open)
+        paren_close = SourceIndexer._find_matching_paren(txt, paren_open)
         if paren_close is None:
             return None
-        k = self._skip_ws(txt, paren_close + 1)
+        k = SourceIndexer._skip_ws(txt, paren_close + 1)
         while True:
-            if self._starts_with_word(txt, k, "const"):
-                k = self._skip_ws(txt, k + len("const"))
+            if SourceIndexer._starts_with_word(txt, k, "const"):
+                k = SourceIndexer._skip_ws(txt, k + len("const"))
                 continue
-            if self._starts_with_word(txt, k, "override"):
-                k = self._skip_ws(txt, k + len("override"))
+            if SourceIndexer._starts_with_word(txt, k, "override"):
+                k = SourceIndexer._skip_ws(txt, k + len("override"))
                 continue
-            if self._starts_with_word(txt, k, "final"):
-                k = self._skip_ws(txt, k + len("final"))
+            if SourceIndexer._starts_with_word(txt, k, "final"):
+                k = SourceIndexer._skip_ws(txt, k + len("final"))
                 continue
-            if self._starts_with_word(txt, k, "noexcept"):
-                k = self._skip_ws(txt, k + len("noexcept"))
+            if SourceIndexer._starts_with_word(txt, k, "noexcept"):
+                k = SourceIndexer._skip_ws(txt, k + len("noexcept"))
                 if k < len(txt) and txt[k] == "(":
-                    nclose = self._find_matching_paren(txt, k)
+                    nclose = SourceIndexer._find_matching_paren(txt, k)
                     if nclose is None:
                         return None
-                    k = self._skip_ws(txt, nclose + 1)
+                    k = SourceIndexer._skip_ws(txt, nclose + 1)
                 continue
             break
         if txt.startswith("->", k):
             k += 2
             while k < len(txt) and txt[k] not in "{;":
                 k += 1
-            k = self._skip_ws(txt, k)
+            k = SourceIndexer._skip_ws(txt, k)
         if k < len(txt) and txt[k] == ":":
             depth_paren = 0
             depth_brace = 0
@@ -399,7 +467,7 @@ class SourceIndexer:
                     return None
                 i += 1
             return None
-        k = self._skip_ws(txt, k)
+        k = SourceIndexer._skip_ws(txt, k)
         if k >= len(txt) or txt[k] != "{":
             return None
         if txt.find(";", fn_idx, k) != -1:
