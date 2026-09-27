@@ -12,7 +12,7 @@ from typing import Any
 from re_agent.llm.protocol import Message
 
 SANDBOX_MODE = "read-only"
-RUNNER_PROFILE = "reagent_runner"
+RUNNER_DOCUMENT_OVERRIDE = 'project_doc_fallback_filenames=["REAGENT_RUNNER.md"]'
 
 
 @dataclass
@@ -98,8 +98,8 @@ class CodexCLIProvider:
     def _exec_args(self, model: Any) -> list[str]:
         return [
             self._codex_bin,
-            "--profile",
-            RUNNER_PROFILE,
+            "-c",
+            RUNNER_DOCUMENT_OVERRIDE,
             "exec",
             "-s",
             SANDBOX_MODE,
@@ -117,8 +117,8 @@ class CodexCLIProvider:
         # policy is re-asserted through a config override instead.
         return [
             self._codex_bin,
-            "--profile",
-            RUNNER_PROFILE,
+            "-c",
+            RUNNER_DOCUMENT_OVERRIDE,
             "exec",
             "resume",
             thread_id,
