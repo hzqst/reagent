@@ -80,7 +80,11 @@ def test_unavailable_type_reader_preserves_decompile_with_explicit_gap(monkeypat
     assert "unavailable" in json.loads(result.raw_output)["signature_error"]
 
 
-def test_is_re_backend():
+def test_is_re_backend(monkeypatch):
+    # ``REBackend`` is @runtime_checkable, so ``isinstance`` probes
+    # ``capabilities``, which performs a live ``tools/list`` handshake unless
+    # the transport is stubbed like every other test in this module.
+    _backend(monkeypatch, {"__tools__": []})
     assert isinstance(IdaMcpBackend(), REBackend)
 
 
