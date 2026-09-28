@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from re_agent.backend.stages import backend_stage
 from re_agent.config.loader import load_config, validate_config
 from re_agent.config.schema import ReAgentConfig
 from re_agent.core.models import FunctionTarget
@@ -59,7 +60,7 @@ def cmd_reverse(args: argparse.Namespace) -> int:
 
     reverser_llm = create_provider(config.agents.reverser or config.llm)
     checker_llm = create_provider(config.agents.checker or config.llm)
-    backend = create_backend(config.backend)
+    backend = create_backend(config.backend, log_dir=Path(config.output.log_dir) / "idalib")
     session = Session(config.output.session_file)
     session.bind(project_fingerprint(config))
 
@@ -69,7 +70,8 @@ def cmd_reverse(args: argparse.Namespace) -> int:
         class_name = args.class_name or ""
         function_name = ""
 
-        dec = backend.decompile(args.address)
+        with backend_stage(backend, "target"):
+            dec = backend.decompile(args.address)
         if dec.name:
             resolved_class, _, function_name = dec.name.rpartition("::")
             function_name = function_name or dec.name
@@ -158,8 +160,9 @@ def _dry_run(args: argparse.Namespace, config: ReAgentConfig) -> int:
         print(f"Would reverse functions in class: {args.class_name}")
         from re_agent.backend.registry import create_backend
 
-        backend = create_backend(config.backend)
-        entries = backend.remaining(args.class_name)
+        backend = create_backend(config.backend, log_dir=Path(config.output.log_dir) / "idalib")
+        with backend_stage(backend, "selection"):
+            entries = backend.remaining(args.class_name)
         max_fn = args.max_functions or config.orchestrator.max_functions_per_class
         for entry in entries[:max_fn]:
             print(f"  {entry.address}  {entry.class_name}::{entry.name}")

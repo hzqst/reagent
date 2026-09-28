@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 
 from re_agent.backend.registry import create_backend
+from re_agent.backend.stages import backend_stage
 from re_agent.config.loader import load_config
 
 
@@ -14,26 +15,27 @@ def cmd_estimate(args: argparse.Namespace) -> int:
     config = load_config(Path(args.config))
     reverser_config = config.agents.reverser or config.llm
     checker_config = config.agents.checker or config.llm
-    backend = create_backend(config.backend)
-    targets: list[str] = []
-    if args.address:
-        targets = [args.address]
-    elif args.class_name:
-        targets = [entry.address for entry in backend.remaining(args.class_name)[: args.limit]]
-    else:
-        print("Error: specify --address or --class")
-        return 1
+    backend = create_backend(config.backend, log_dir=Path(config.output.log_dir) / "idalib")
+    with backend_stage(backend, "estimate"):
+        targets: list[str] = []
+        if args.address:
+            targets = [args.address]
+        elif args.class_name:
+            targets = [entry.address for entry in backend.remaining(args.class_name)[: args.limit]]
+        else:
+            print("Error: specify --address or --class")
+            return 1
 
-    base_input_tokens = 0
-    inspected = 0
-    for target in targets:
-        try:
-            raw = backend.decompile(target).raw_output
-        except Exception:
-            continue
-        # Four characters/token plus a conservative allowance for source and evidence.
-        base_input_tokens += math.ceil(len(raw) / 4) + 3000
-        inspected += 1
+        base_input_tokens = 0
+        inspected = 0
+        for target in targets:
+            try:
+                raw = backend.decompile(target).raw_output
+            except Exception:
+                continue
+            # Four characters/token plus a conservative allowance for source and evidence.
+            base_input_tokens += math.ceil(len(raw) / 4) + 3000
+            inspected += 1
     rounds = max(config.orchestrator.max_review_rounds, 1)
     investigations = config.orchestrator.max_investigations if config.orchestrator.investigation_enabled else 0
     reverser_calls = inspected * rounds * (1 + investigations)

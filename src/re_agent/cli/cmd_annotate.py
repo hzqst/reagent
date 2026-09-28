@@ -24,13 +24,15 @@ from re_agent.backend.ida_write import (
     apply_member_change,
     is_unnamed,
 )
+from re_agent.backend.idalib_lifecycle import IdalibLifecycleError
+from re_agent.backend.stages import ida_client_stage
 from re_agent.config.loader import load_config
 from re_agent.config.schema import ReAgentConfig
 from re_agent.core.models import StructChange, SymbolProposal
 from re_agent.core.symbols import load_symbols, symbols_path
 from re_agent.utils.address import checked_address
 
-WRITE_BACKENDS = frozenset({"ida-mcp", "ida"})
+WRITE_BACKENDS = frozenset({"ida-mcp", "ida", "idalib-mcp"})
 
 
 @dataclass
@@ -66,7 +68,7 @@ def cmd_annotate(args: argparse.Namespace) -> int:
     if backend_type not in WRITE_BACKENDS:
         raise ValueError(
             "annotate writes to an IDA database, so it needs "
-            f"backend.type 'ida-mcp'; configured type is {config.backend.type!r}"
+            f"backend.type 'ida-mcp' or 'idalib-mcp'; configured type is {config.backend.type!r}"
         )
 
     entries = _load_entries(args, config)
@@ -74,7 +76,23 @@ def cmd_annotate(args: argparse.Namespace) -> int:
         print("No symbol proposals to apply.", file=sys.stderr)
         return 0
 
-    client = IdaWriteClient(config.backend.url, config.backend.timeout_s)
+    if backend_type == "idalib-mcp" and args.write and not args.save:
+        print("Without --save, changes will be discarded when this stage closes.", file=sys.stderr)
+    saved, save_error = False, ""
+    try:
+        with ida_client_stage(config.backend, "annotate", IdaWriteClient,
+                              Path(config.output.log_dir) / "idalib") as client:
+            code, saved, save_error = _annotate(args, entries, client, inferred=inferred, corrections=corrections)
+    except IdalibLifecycleError as exc:
+        _report(entries, write=args.write, saved=saved,
+                save_error=f"{save_error} IDA lifecycle failed: {exc}".strip())
+        raise
+    _report(entries, write=args.write, saved=saved, save_error=save_error)
+    return code
+
+
+def _annotate(args: argparse.Namespace, entries: list[_Entry], client: IdaWriteClient, *,
+              inferred: bool, corrections: bool) -> tuple[int, bool, str]:
     names = client.function_names([entry.address for entry in entries])
 
     _decide(entries, names, only_unnamed=args.only_unnamed, include_flagged=args.include_flagged)
@@ -140,7 +158,6 @@ def cmd_annotate(args: argparse.Namespace) -> int:
                 except (RuntimeError, OSError, ValueError) as exc:
                     save_error = str(exc)
 
-    _report(entries, write=args.write, saved=saved, save_error=save_error)
     failed = any(
         e.action not in {"apply", "skip-named", "skip-flagged"}
         or e.comment_status in {"failed", "conflict", "rejected"}
@@ -149,7 +166,7 @@ def cmd_annotate(args: argparse.Namespace) -> int:
         }
         for e in entries
     )
-    return 1 if failed or save_error else 0
+    return (1 if failed or save_error else 0), saved, save_error
 
 
 def _plan_comment(client: IdaWriteClient, entry: _Entry, *, replace: bool) -> None:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_task
 from re_agent.core.models import FunctionTarget
 from re_agent.core.session import Session
 from re_agent.utils.address import normalize_address
 
 
+@backend_task("selection")
 def pick_next(
     class_name: str,
     backend: REBackend,

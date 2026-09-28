@@ -7,6 +7,7 @@ import re
 import sys
 from pathlib import Path
 
+from re_agent.backend.idalib_lifecycle import IdalibLifecycleError
 from re_agent.config.loader import load_config
 from re_agent.core.models import HookEntry, ParityStatus
 from re_agent.parity.engine import read_hooks, run_parity
@@ -68,8 +69,10 @@ def cmd_parity(args: argparse.Namespace) -> int:
     if not args.skip_ghidra:
         try:
             from re_agent.backend.registry import create_backend
-            backend = create_backend(config.backend)
+            backend = create_backend(config.backend, log_dir=Path(config.output.log_dir) / "idalib")
         except Exception as exc:
+            if config.backend.type.lower().replace("_", "-") == "idalib-mcp":
+                raise IdalibLifecycleError(str(exc)) from exc
             print(f"Warning: could not initialize backend ({exc}), running source-only checks", file=sys.stderr)
 
     results = run_parity(hooks, source_root, config, backend=backend)

@@ -2,23 +2,35 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from re_agent.backend.protocol import REBackend
 from re_agent.config.schema import BackendConfig
 
 
-def create_backend(config: BackendConfig) -> REBackend:
+def create_backend(config: BackendConfig, *, log_dir: Path | None = None) -> REBackend:
     """Create an RE backend based on config.backend.type.
 
     Supported types:
         - ``"ghidra-bridge"`` (default): Shells out to a Ghidra CLI tool.
         - ``"ghidra-json"``: Reads offline Ghidra exports from disk.
         - ``"ida-mcp"``: Calls an ``ida-pro-mcp`` HTTP endpoint.
+        - ``"idalib-mcp"``: Owns a headless IDA worker for each task stage.
         - ``"stub"``: In-memory stub returning canned data (for testing).
 
     Raises:
         ValueError: If the backend type is not recognised.
     """
     backend_type = config.type.lower().replace("_", "-")
+
+    if backend_type == "idalib-mcp":
+        from re_agent.backend.idalib import IdalibBackend
+        from re_agent.backend.idalib_lifecycle import validate_idalib_config
+
+        validate_idalib_config(config)
+        backend = IdalibBackend(config)
+        backend.log_dir = log_dir
+        return backend
 
     if backend_type in ("ghidra-bridge", "ghidra"):
         from re_agent.backend.ghidra_bridge import GhidraBridgeBackend
@@ -50,5 +62,5 @@ def create_backend(config: BackendConfig) -> REBackend:
 
     raise ValueError(
         f"Unknown backend type: {config.type!r}. "
-        "Supported: ghidra-bridge, ghidra-json, ida-mcp, stub"
+        "Supported: ghidra-bridge, ghidra-json, ida-mcp, idalib-mcp, stub"
     )

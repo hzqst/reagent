@@ -7,11 +7,14 @@ import sys
 import uuid
 from pathlib import Path
 
+from re_agent.backend.idalib_lifecycle import IdalibLifecycleError
+from re_agent.backend.stages import ida_client_stage
 from re_agent.config import load_config
 from re_agent.recovery.ida import IdaRecoveryClient
 from re_agent.recovery.provider import create_recovery_provider
 from re_agent.recovery.runner import run_recovery
 from re_agent.utils.address import checked_address
+from re_agent.utils.storage import atomic_json
 from re_agent.verification.candidate import discover_candidate_files
 
 
@@ -20,8 +23,9 @@ def cmd_recover_types(args: argparse.Namespace) -> int:
     if args.save and not args.write:
         raise ValueError("--save requires --write")
     config = load_config(Path(args.config))
-    if config.backend.type.lower().replace("_", "-") not in {"ida-mcp", "ida"}:
-        raise ValueError("recover-types currently supports only backend.type 'ida-mcp'")
+    managed = config.backend.type.lower().replace("_", "-") == "idalib-mcp"
+    if config.backend.type.lower().replace("_", "-") not in {"ida-mcp", "ida", "idalib-mcp"}:
+        raise ValueError("recover-types requires backend.type 'ida-mcp' or 'idalib-mcp'")
     if config.recovery is None:
         raise ValueError("recover-types requires an independent recovery provider/model configuration")
     addresses = list(dict.fromkeys(hex(int(checked_address(address), 16)) for address in args.address))
@@ -48,17 +52,27 @@ def cmd_recover_types(args: argparse.Namespace) -> int:
         Path(config.output.report_dir) / "recovery" / f"{uuid.uuid4().hex}.json"
     )
     provider = create_recovery_provider(config.recovery)
-    client = IdaRecoveryClient(config.backend.url, config.backend.timeout_s)
+    if managed and args.write and not args.save:
+        print("[recover-types] Without --save, changes will be discarded when this stage closes.", file=sys.stderr)
     logger = logging.getLogger("re_agent.recovery")
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("[recover-types] %(message)s"))
     previous_level = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+    report = None
     try:
-        report = run_recovery(provider, client, addresses, config.recovery, report_path,
-                              write=args.write, save=args.save, evidence="\n\n".join(evidence),
-                              objective=args.objective)
+        with ida_client_stage(config.backend, "recover", IdaRecoveryClient,
+                              Path(config.output.log_dir) / "idalib") as client:
+            report = run_recovery(provider, client, addresses, config.recovery, report_path,
+                                  write=args.write, save=args.save, evidence="\n\n".join(evidence),
+                                  objective=args.objective)
+    except IdalibLifecycleError as exc:
+        if report is not None:
+            report["status"] = "failed"
+            report["error"] = f"{report.get('error', '')} IDA lifecycle failed: {exc}".strip()
+            atomic_json(report_path, report)
+        raise
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous_level)

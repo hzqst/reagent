@@ -42,6 +42,29 @@ _PAGE_LIMIT = 100
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 
+class McpTransportError(RuntimeError):
+    """A request failed without a usable tool result."""
+
+
+def bound_arguments(arguments: dict[str, Any], database: str | None) -> dict[str, Any]:
+    """Bind worker calls to the harness-selected database, never a model choice."""
+    return {**arguments, "database": database} if database is not None else arguments
+
+
+def raise_busy_error(tool: str, result: dict[str, Any]) -> None:
+    """A supervisor timeout is incomplete evidence, not an unsupported query."""
+    if not result.get("isError"):
+        return
+    payload = result.get("structuredContent")
+    if payload is None:
+        try:
+            payload = json.loads(_content_text(result))
+        except (ValueError, TypeError):
+            return
+    if isinstance(payload, dict) and payload.get("busy") is True:
+        raise McpTransportError(f"IDA worker did not complete {tool!r}: {payload.get('error', 'busy')}")
+
+
 def ida_target(target: str) -> str:
     """Render a target the way ``ida-pro-mcp`` expects it.
 
@@ -93,17 +116,17 @@ def post_jsonrpc(
             raw = response.read().decode("utf-8")
             returned_session = response.headers.get("Mcp-Session-Id") or session_id
     except OSError as exc:
-        raise RuntimeError(f"IDA MCP request failed: {url} ({exc})") from exc
+        raise McpTransportError(f"IDA MCP request failed: {url} ({exc})") from exc
 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"IDA MCP returned invalid JSON from {url}") from exc
+        raise McpTransportError(f"IDA MCP returned invalid JSON from {url}") from exc
 
     if not isinstance(payload, dict):
-        raise RuntimeError(f"IDA MCP returned an unexpected payload from {url}")
+        raise McpTransportError(f"IDA MCP returned an unexpected payload from {url}")
     if "error" in payload:
-        raise RuntimeError(f"IDA MCP {method} failed: {payload['error']}")
+        raise McpTransportError(f"IDA MCP {method} failed: {payload['error']}")
     return payload.get("result") or {}, returned_session
 
 
@@ -126,7 +149,7 @@ def recover_truncated(tool: str, result: dict[str, Any], timeout_s: int) -> Any:
 
     download_url = meta.get("download_url")
     if not download_url:
-        raise RuntimeError(f"IDA MCP tool {tool!r} truncated its output without a download URL")
+        raise McpTransportError(f"IDA MCP tool {tool!r} truncated its output without a download URL")
     return _get_json(str(download_url), timeout_s)
 
 
@@ -137,12 +160,12 @@ def _get_json(url: str, timeout_s: int) -> Any:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             raw = response.read().decode("utf-8")
     except OSError as exc:
-        raise RuntimeError(f"Failed to fetch full IDA MCP output from {url} ({exc})") from exc
+        raise McpTransportError(f"Failed to fetch full IDA MCP output from {url} ({exc})") from exc
 
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"IDA MCP output at {url} was not valid JSON") from exc
+        raise McpTransportError(f"IDA MCP output at {url} was not valid JSON") from exc
 
 
 class IdaMcpBackend:
@@ -154,9 +177,10 @@ class IdaMcpBackend:
             reach 120s for the composite analysis tools.
     """
 
-    def __init__(self, url: str = DEFAULT_URL, timeout_s: int = 120) -> None:
+    def __init__(self, url: str = DEFAULT_URL, timeout_s: int = 120, *, database: str | None = None) -> None:
         self._url = url
         self._timeout_s = timeout_s
+        self._database = database
         self._caps: BackendCapabilities | None = None
         self._caps_error: RuntimeError | None = None
         self._session_id: str | None = None
@@ -197,7 +221,7 @@ class IdaMcpBackend:
         result, session_id = post_jsonrpc(
             self._url,
             "tools/call",
-            {"name": tool, "arguments": arguments},
+            {"name": tool, "arguments": bound_arguments(arguments, self._database)},
             self._timeout_s,
             self._session_id,
         )
@@ -205,6 +229,7 @@ class IdaMcpBackend:
             self._session_id = session_id
 
         if result.get("isError"):
+            raise_busy_error(tool, result)
             raise RuntimeError(f"IDA MCP tool {tool!r} failed: {_content_text(result)}")
 
         structured = recover_truncated(tool, result, self._timeout_s)
@@ -253,7 +278,7 @@ class IdaMcpBackend:
         return BackendCapabilities(
             has_decompile="decompile" in names,
             has_asm="disasm" in names,
-            has_structs="search_structs" in names,
+            has_structs=("type_inspect" if self._database is not None else "search_structs") in names,
             has_xrefs="xrefs_to" in names,
             has_search="list_funcs" in names,
             has_context="analyze_function" in names,
@@ -359,6 +384,22 @@ class IdaMcpBackend:
 
     def get_struct(self, name: str) -> StructDef | None:
         """Retrieve a struct definition by name via the ``ida://struct`` resource."""
+        if self._database is not None:
+            # Supervisors route tools by database; ida://struct resources are
+            # intentionally not forwarded to workers.
+            payload = self._first_item(self._call("type_inspect", {
+                "queries": {"name": name, "include_members": True, "max_members": 4096},
+            }))
+            if not payload or not payload.get("exists") or not payload.get("is_udt"):
+                return None
+            members = payload.get("members") or []
+            if len(members) != payload.get("member_count"):
+                raise RuntimeError(f"IDA type layout was truncated for {name}")
+            normalized = []
+            for member in members:
+                offset = member.get("offset", 0)
+                normalized.append({**member, "offset": int(offset, 0) if isinstance(offset, str) else offset})
+            return _parse_struct(name, json.dumps({**payload, "members": normalized}))
         try:
             payload, _ = post_jsonrpc(
                 self._url,

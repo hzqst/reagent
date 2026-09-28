@@ -7,7 +7,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from re_agent.backend.idalib_lifecycle import IdalibLifecycleError
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_task
 from re_agent.config.schema import ParityConfig, ReAgentConfig
 from re_agent.core.models import (
     Finding,
@@ -106,6 +108,7 @@ def score_single(
     return status, findings
 
 
+@backend_task("parity")
 def fetch_ghidra_data(address: str, backend: REBackend) -> GhidraData:
     """Fetch and aggregate Ghidra analysis data for a single function address.
 
@@ -204,6 +207,8 @@ def run_parity(
         elif backend is not None:
             try:
                 ghidra = fetch_ghidra_data(entry.address, backend)
+            except IdalibLifecycleError:
+                raise
             except Exception:
                 logger.warning("Failed to fetch Ghidra data for %s", entry.address, exc_info=True)
 

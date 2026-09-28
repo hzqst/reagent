@@ -6,10 +6,12 @@ import json
 import re
 
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_task
 from re_agent.core.models import FunctionTarget, ObjectiveVerdict, Verdict
 from re_agent.utils.text import count_calls, count_control_flow, strip_comments
 
 
+@backend_task("objective")
 def verify_candidate(
     code: str,
     target: FunctionTarget,
