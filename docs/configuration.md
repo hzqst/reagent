@@ -144,6 +144,90 @@ the `ida://struct/{name}` MCP resource instead. A profile that omits
 `has_structs: false` even though struct retrieval still works. No production
 call site consults this flag.
 
+### Managed headless IDA
+
+```yaml
+backend:
+  type: idalib-mcp
+  database_path: /absolute/path/program.i64
+  idalib_mcp_path: idalib-mcp
+  startup_timeout_s: 120
+  shutdown_timeout_s: 15
+  timeout_s: 45
+```
+
+This mode requires a licensed, activated IDA/idalib installation and an
+`idalib-mcp` supervisor exposing `idb_open`, `idb_list`, `py_eval`, and
+`server_health`. The supervisor must support explicit `database` routing,
+`force_headless`, and owned worker PID metadata. The Python environment behind
+the executable must have working idalib and Hex-Rays support; reagent does not
+import IDA into its own interpreter or install it automatically.
+
+`database_path` must refer to an existing packed `.i64`/`.idb`. Relative paths
+are resolved against the working directory, as with other project paths.
+`idalib_mcp_path` can be an executable name on PATH or an explicit path. No
+database is automatically created, replaced, or rebuilt. Close other IDA
+instances using this database first. Concurrent reagent stages targeting the
+same database fail with an explicit ownership error. Different databases may
+run independently.
+
+The lifecycle binds to `127.0.0.1` on a dynamically allocated port; `backend.url`
+is unused in this mode. Startup verifies listener ownership, worker ownership,
+and the actual IDB path before handing a client to a task. Supervisor tools are
+bound to the selected database; models cannot choose another session. Struct
+layout uses `type_inspect`, since the supervisor does not route IDA resources.
+
+Each reverse, fix, and checker call gets a fresh worker and evidence cache.
+One `recover-types` invocation (including all selected addresses and readback)
+and one `annotate` invocation each form a stage. Planning, selection, doctor,
+estimate, objective verification, and parity evidence use separate bounded
+stages. Compilation and tests run after their IDA stage has closed. Direct
+Python callers use `with backend_stage(backend, "task"):` from
+`re_agent.backend.stages` around raw managed-backend operations; the public
+agent/orchestrator entry points already provide their own stage boundaries.
+
+The worker receives a heartbeat every 30 seconds while a model is running.
+`startup_timeout_s` bounds startup/readiness; `shutdown_timeout_s` bounds each
+shutdown operation. `timeout_s` controls individual evidence requests: increase
+it for large functions or expensive composite tools. Lifecycle failures fail the
+stage and are not silently accepted as source-only validation. Write calls are
+never automatically replayed after a connection failure.
+
+Only the existing explicit `--save` flow persists annotation/recovery changes.
+Closing explicitly discards any remaining unsaved changes before exiting IDA.
+The owned worker's runtime default for `idapro.close_database` is also set to
+discard, so a later idle shutdown or handled termination signal cannot silently
+save pending edits if the reagent process disappears. Explicit `idb_save`
+continues to work normally.
+`--write` alone therefore does not carry changes to the next stage. Recovery
+backups remain separate files under the existing recovery policy. On failure,
+cleanup stops only recorded owned process identities, including detached
+workers; it never closes an external GUI. Any cleanup failure or leftover IDA
+working files is reported. Inspect such files before reopening; reagent does
+not delete them or assume they are safe to discard.
+
+Per-stage process output is written beneath `output.log_dir/idalib`. The
+runtime endpoint is not persisted in configuration or project fingerprints.
+Existing external `ida-mcp` configurations and fingerprints remain compatible.
+
+Real IDA tests are opt-in and copy the provided database to pytest's temporary
+directory. They make no model calls:
+
+```sh
+RE_AGENT_IDALIB_TEST_DATABASE=/path/to/small-test.i64 \
+  pytest tests/test_backend/test_idalib_integration.py -q -k 'not long_running'
+
+# Repeated stages for over two hours, including an idle period beyond the worker TTL.
+RE_AGENT_IDALIB_TEST_DATABASE=/path/to/small-test.i64 \
+RE_AGENT_IDALIB_SOAK_SECONDS=7260 \
+  pytest tests/test_backend/test_idalib_integration.py -q -s -k long_running
+```
+
+On PowerShell, set the same variables with `$env:NAME = 'value'` before running
+pytest. `RE_AGENT_IDALIB_TEST_EXECUTABLE` optionally selects a different
+`idalib-mcp` executable. A skipped real-IDA test is not verification of the
+installed runtime.
+
 ### Applying annotations back to the database
 
 A reversal run may propose a name and comment for each function it

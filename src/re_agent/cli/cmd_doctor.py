@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 from re_agent.backend.registry import create_backend
+from re_agent.backend.stages import backend_stage
 from re_agent.config.loader import load_config
 
 
@@ -52,11 +53,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     ]:
         add(name + " gate", not validation.enabled or not required or bool(commands))
     try:
-        backend = create_backend(config.backend)
-        add("decompile capability", backend.capabilities.has_decompile)
-        if args.address:
-            result = backend.decompile(args.address)
-            add("target evidence", bool(result.decompiled.strip()), result.name)
+        backend = create_backend(config.backend, log_dir=Path(config.output.log_dir) / "idalib")
+        with backend_stage(backend, "doctor"):
+            add("decompile capability", backend.capabilities.has_decompile)
+            if args.address:
+                result = backend.decompile(args.address)
+                add("target evidence", bool(result.decompiled.strip()), result.name)
     except (OSError, ValueError, RuntimeError) as exc:
         add("backend", False, str(exc))
     print(json.dumps({"checks": checks, "ready": all(c["passed"] for c in checks)}, indent=2))

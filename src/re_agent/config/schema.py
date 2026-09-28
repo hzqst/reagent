@@ -116,6 +116,10 @@ class BackendConfig:
     cli_path: str = "ghidra-bridge"
     url: str = "http://127.0.0.1:13337/mcp"
     timeout_s: int = 45
+    database_path: str | None = None
+    idalib_mcp_path: str = "idalib-mcp"
+    startup_timeout_s: int = 120
+    shutdown_timeout_s: int = 15
 
 
 @dataclass

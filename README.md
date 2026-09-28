@@ -151,8 +151,16 @@ re-agent init --profile generic-cpp
 Running `re-agent init` without `--profile` preserves the original
 GTA-reversed defaults. Prefer an explicit profile for new projects.
 
-Then edit `re-agent.yaml`. At minimum, select an LLM, point the backend at the
-installed bridge executable, set the source paths, and configure validation.
+Then edit `re-agent.yaml`. At minimum, select an LLM, configure a backend,
+set the source paths, and configure validation.
+
+For IDA without a GUI, use `backend.type: idalib-mcp` with an existing
+`database_path` (`.i64` or `.idb`). Re-agent starts and closes its own headless
+IDA worker for each reverse/fix, checker, and recovery stage, with fresh
+evidence caches and keepalive during model calls. See
+[managed IDA configuration](docs/configuration.md#managed-headless-ida)
+and [the example](examples/idalib-mcp.yaml). The existing `ida-mcp` mode
+continues to connect to an externally managed server.
 
 ```yaml
 llm:
@@ -634,6 +642,11 @@ not consume or extend `SymbolProposal`; `annotate` remains the existing proposal
 application workflow. Other backends currently report this command as unsupported.
 
 Configure its model independently and reuse the existing IDA connection:
+
+The `idalib-mcp` backend also supports this command and `annotate`. Each command
+owns a separate worker. In managed mode, `--write` without `--save` performs
+the investigation and readback but discards unsaved changes when the worker
+closes; use `--write --save` to persist verified changes for later stages.
 
 ```yaml
 backend:

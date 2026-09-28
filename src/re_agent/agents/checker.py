@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_task
 from re_agent.core.models import CheckerVerdict, FunctionTarget, SymbolProposal, Verdict
 from re_agent.llm.protocol import LLMProvider, Message
 from re_agent.utils.templates import render_template
@@ -123,6 +124,7 @@ class CheckerAgent:
         self.last_prompt: str = ""
         self.last_response: str = ""
 
+    @backend_task("checker")
     def check(
         self,
         code: str,

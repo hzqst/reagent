@@ -8,6 +8,7 @@ from pathlib import Path
 
 from re_agent.agents.source_context import SourceContextBuilder
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_task
 from re_agent.config.schema import ProjectProfile
 from re_agent.core.knowledge_graph import KnowledgeGraph
 from re_agent.core.models import FunctionTarget, SymbolProposal
@@ -117,6 +118,7 @@ class ReverserAgent:
         self.last_symbol: SymbolProposal | None = None
         self._original_signature = ""
 
+    @backend_task("reverse")
     def reverse(self, target: FunctionTarget) -> tuple[str, str]:
         """Reverse a function. Returns (code, reversed_function_tag)."""
         # Gather context
@@ -357,6 +359,7 @@ class ReverserAgent:
             rendered = repr(value)
         return f"TOOL {tool}({argument}):\n{bounded_evidence(rendered, 12000)}", True
 
+    @backend_task("fix")
     def fix(
         self,
         checker_report: str,

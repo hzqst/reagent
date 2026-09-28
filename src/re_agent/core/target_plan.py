@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_task
 from re_agent.core.models import EvidenceGap, FunctionTarget
 from re_agent.utils.address import checked_address
 from re_agent.utils.storage import atomic_json
@@ -84,6 +85,7 @@ def _limits(depth: int, limit: int) -> None:
         raise ValueError("Plan depth must be nonnegative and function limit must be positive")
 
 
+@backend_task("plan")
 def build_plan(backend: REBackend, seeds: list[str], identity: str, *,
                max_depth: int = 1, max_functions: int = 100) -> TargetPlan:
     _limits(max_depth, max_functions)

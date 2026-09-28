@@ -12,7 +12,15 @@ import re
 from typing import Any
 
 from re_agent.backend.ida_comments import comment_result, comment_script
-from re_agent.backend.ida_mcp import as_list, ida_target, post_jsonrpc, recover_truncated
+from re_agent.backend.ida_mcp import (
+    McpTransportError,
+    as_list,
+    bound_arguments,
+    ida_target,
+    post_jsonrpc,
+    raise_busy_error,
+    recover_truncated,
+)
 from re_agent.backend.ida_prototype import prototype_result, prototype_script
 from re_agent.core.models import StructChange
 from re_agent.utils.address import address_key as address_key
@@ -73,11 +81,13 @@ class IdaWriteClient:
         timeout_s: Maximum seconds per HTTP call.
     """
 
-    def __init__(self, url: str, timeout_s: int = 120) -> None:
+    def __init__(self, url: str, timeout_s: int = 120, *, database: str | None = None) -> None:
         self._url = url
         self._timeout_s = timeout_s
         self._session_id: str | None = None
         self._initialized = False
+        self._database = database
+        self.transport_error: McpTransportError | None = None
 
     # -- transport ------------------------------------------------------------
 
@@ -105,14 +115,19 @@ class IdaWriteClient:
         output limit, and a partial result would make already-named functions
         look unnamed to ``--only-unnamed``.
         """
-        self._ensure_session()
-        result, session_id = post_jsonrpc(
-            self._url,
-            "tools/call",
-            {"name": tool, "arguments": arguments},
-            self._timeout_s,
-            self._session_id,
-        )
+        try:
+            self._ensure_session()
+            result, session_id = post_jsonrpc(
+                self._url,
+                "tools/call",
+                {"name": tool, "arguments": bound_arguments(arguments, self._database)},
+                self._timeout_s,
+                self._session_id,
+            )
+            raise_busy_error(tool, result)
+        except McpTransportError as exc:
+            self.transport_error = exc
+            raise
         if session_id:
             self._session_id = session_id
         if result.get("isError"):
@@ -122,7 +137,11 @@ class IdaWriteClient:
                 if isinstance(block, dict)
             )
             raise RuntimeError(f"IDA MCP tool {tool!r} failed: {text}")
-        return recover_truncated(tool, result, self._timeout_s)
+        try:
+            return recover_truncated(tool, result, self._timeout_s)
+        except McpTransportError as exc:
+            self.transport_error = exc
+            raise
 
     # -- reads ----------------------------------------------------------------
 

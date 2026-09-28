@@ -6,7 +6,9 @@ import logging
 from pathlib import Path
 
 from re_agent.agents.loop import run_fix_loop
+from re_agent.backend.idalib_lifecycle import IdalibLifecycleError
 from re_agent.backend.protocol import REBackend
+from re_agent.backend.stages import backend_stage
 from re_agent.config.schema import ReAgentConfig
 from re_agent.core.models import Finding, FunctionTarget, HookEntry, ReversalResult, ValidationVerdict, Verdict
 from re_agent.core.session import Session
@@ -164,9 +166,13 @@ def validate_result(
 
             # Fetch Ghidra data from the backend for signal checks
             ghidra_data = None
-            if config.parity.enabled and backend.capabilities.has_decompile:
+            if config.parity.enabled:
                 try:
-                    ghidra_data = fetch_ghidra_data(target.address, backend)
+                    with backend_stage(backend, "parity"):
+                        if backend.capabilities.has_decompile:
+                            ghidra_data = fetch_ghidra_data(target.address, backend)
+                except IdalibLifecycleError:
+                    raise
                 except Exception:
                     logger.debug("Ghidra data fetch failed for %s, running source-only", target.address, exc_info=True)
 

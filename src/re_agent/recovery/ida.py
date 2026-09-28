@@ -91,6 +91,13 @@ class IdaRecoveryClient(IdaWriteClient):
             result.extend(items)
             cursor = page.get("nextCursor")
             if not cursor:
+                if self._database is not None:
+                    # Routing belongs to the harness, not the recovery model.
+                    for entry in result:
+                        schema = entry.get("inputSchema", {})
+                        schema.get("properties", {}).pop("database", None)
+                        if "required" in schema:
+                            schema["required"] = [key for key in schema["required"] if key != "database"]
                 helpers = [LOCAL_TYPE_TOOL, INSPECT_TOOL]
                 names = {t["name"] for t in helpers}
                 return [t for t in result if t.get("name") not in names] + helpers

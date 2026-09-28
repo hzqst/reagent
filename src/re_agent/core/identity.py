@@ -12,12 +12,19 @@ from re_agent.config.schema import ReAgentConfig
 
 def project_fingerprint(config: ReAgentConfig) -> str:
     digest = hashlib.sha256()
+    backend = asdict(config.backend)
+    if config.backend.type.lower().replace("_", "-") != "idalib-mcp":
+        for key in ("database_path", "idalib_mcp_path", "startup_timeout_s", "shutdown_timeout_s"):
+            backend.pop(key)
+    elif config.backend.database_path:
+        backend["database_path"] = str(Path(config.backend.database_path).resolve())
+        backend.pop("url")  # The owned endpoint is allocated anew for every stage.
     # Acceptance policy and source profile affect the meaning of an accepted result.
     values = {
         "profile": asdict(config.project_profile),
         "validation": asdict(config.validation),
         "parity": asdict(config.parity),
-        "backend": asdict(config.backend),
+        "backend": backend,
     }
     digest.update(json.dumps(values, sort_keys=True).encode())
     root = Path(config.project_profile.source_root).resolve()

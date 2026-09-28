@@ -1,0 +1,9 @@
+# Merge this backend block into your project configuration. Keep your existing
+# model, source profile, and trusted build/test settings.
+backend:
+  type: idalib-mcp
+  database_path: ./program.i64
+  idalib_mcp_path: idalib-mcp
+  startup_timeout_s: 120
+  shutdown_timeout_s: 15
+  timeout_s: 45
