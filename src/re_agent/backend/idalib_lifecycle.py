@@ -166,7 +166,8 @@ class IdaMcpLifecycle:
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
                     break
-                if owns_listener(self.process.pid, self._port):
+                self._capture_children()
+                if any(owns_listener(pid, self._port) for pid in self._owned):
                     return
                 time.sleep(POLL_SECONDS)
             if self.process.poll() is None:
