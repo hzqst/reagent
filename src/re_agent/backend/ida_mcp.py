@@ -279,7 +279,7 @@ class IdaMcpBackend:
             has_decompile="decompile" in names,
             has_asm="disasm" in names,
             has_structs=("type_inspect" if self._database is not None else "search_structs") in names,
-            has_xrefs="xrefs_to" in names,
+            has_xrefs="callees" in names,
             has_search="list_funcs" in names,
             has_context="analyze_function" in names,
             has_cfg="basic_blocks" in names,
@@ -354,9 +354,21 @@ class IdaMcpBackend:
     def xrefs_from(self, target: str) -> list[XRef]:
         """Parse cross-references FROM a function (IDA's "callees")."""
         item = self._first_item(self._call("callees", {"addrs": [ida_target(target)]}))
-        if not item or item.get("error"):
-            return []
-        return self._parse_xrefs(item.get("callees"))
+        if item is None:
+            raise RuntimeError(f"IDA callees returned no result for {target}")
+        if item.get("error"):
+            raise RuntimeError(f"IDA callees failed for {target}: {item['error']}")
+        entries = item.get("callees")
+        if not isinstance(entries, list):
+            raise RuntimeError(f"IDA callees returned an invalid callee list for {target}")
+        results: list[XRef] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("addr"), str) or not entry["addr"].strip():
+                raise RuntimeError(f"IDA callees returned an invalid callee entry for {target}")
+            # This tool returns only call targets. Its type field describes
+            # the target (internal/external), not the cross-reference kind.
+            results.append(XRef(entry["addr"], str(entry.get("name") or ""), "CALL"))
+        return results
 
     @staticmethod
     def _parse_xrefs(entries: Any) -> list[XRef]:
