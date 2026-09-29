@@ -10,6 +10,8 @@ from re_agent.backend.ida_prototype import PROTOTYPE_MARKER
 from re_agent.backend.protocol import REBackend
 from re_agent.backend.registry import create_backend
 from re_agent.config.schema import BackendConfig
+from re_agent.core.models import XRef
+from re_agent.core.target_plan import build_plan
 
 
 def _backend(monkeypatch, responses, session="sess-1"):
@@ -172,9 +174,77 @@ def test_xrefs_to_null_entries_are_empty(monkeypatch):
     assert IdaMcpBackend().xrefs_to("0x1") == []
 
 
-def test_xrefs_from_maps_data_refs(monkeypatch):
-    _backend(monkeypatch, {"callees": _ok({"result": [{"addr": "0x1", "callees": None, "error": None}]})})
+@pytest.mark.parametrize("kind", ["internal", "external", "code", "future-target-kind"])
+def test_xrefs_from_classifies_callee_targets_as_calls(monkeypatch, kind):
+    _backend(monkeypatch, {"callees": _ok({"result": [{
+        "addr": "0x1", "callees": [{"addr": "0x2", "name": "callee", "type": kind}],
+    }]})})
+    assert [XRef("0x2", "callee", "CALL")] == IdaMcpBackend().xrefs_from("0x1")
+
+
+def test_xrefs_from_empty_callees_are_valid(monkeypatch):
+    _backend(monkeypatch, {"callees": _ok({"result": [{"addr": "0x1", "callees": []}]})})
     assert IdaMcpBackend().xrefs_from("0x1") == []
+
+
+@pytest.mark.parametrize("payload", [
+    None, {}, {"result": []}, {"result": [None]},
+    {"result": [{"error": "Address not mapped"}]},
+    {"result": [{"callees": None}]},
+    {"result": [{"callees": {}}]},
+    {"result": [{"callees": [None]}]},
+    {"result": [{"callees": [{"name": "missing address"}]}]},
+])
+def test_unusable_callees_become_plan_gaps(monkeypatch, payload):
+    responses = _plain_decompile()
+    responses.update({
+        "__tools__": ["callees", "analyze_function"],
+        "callees": _ok(payload),
+    })
+    _backend(monkeypatch, responses)
+    backend = IdaMcpBackend()
+    # Isolate planning's xref path from decompile's optional callee count.
+    monkeypatch.setattr(backend, "_callee_count", lambda target: None)
+    monkeypatch.setattr(backend, "get_context", lambda target: None)
+    plan = build_plan(backend, ["0x1"], "a" * 64)
+    assert plan.edges == []
+    assert any(gap.origin == "xrefs_from" and gap.kind == "query_failed" for gap in plan.gaps)
+
+
+def test_plan_expands_current_ida_callees(monkeypatch):
+    _backend(monkeypatch, {"__tools__": ["callees", "analyze_function"]})
+    backend = IdaMcpBackend()
+
+    def call(tool, arguments):
+        if tool == "decompile":
+            return {"addr": arguments["addr"], "code": "void f(void) {}"}
+        if tool == "lookup_funcs":
+            return {"result": []}
+        if tool == "analyze_function":
+            return {"addr": arguments["addr"], "name": "f"}
+        assert tool == "callees"
+        entries = [
+            {"addr": "0x2", "name": "internal_fn", "type": "internal"},
+            {"addr": "0x3", "name": "external_fn", "type": "external"},
+        ] if arguments["addrs"] == ["0x00000001"] else []
+        return {"result": [{"callees": entries}]}
+
+    monkeypatch.setattr(backend, "_call", call)
+    plan = build_plan(backend, ["0x1"], "a" * 64, max_depth=1)
+    assert [target.address for target in plan.functions] == ["00000001", "00000002", "00000003"]
+    assert plan.edges == [
+        {"source": "00000001", "target": "00000002"},
+        {"source": "00000001", "target": "00000003"},
+    ]
+    assert plan.gaps == []
+
+
+@pytest.mark.parametrize("names, expected", [
+    (["xrefs_to"], False), (["callees"], True), (["xrefs_to", "callees"], True),
+])
+def test_xref_capability_tracks_callees(monkeypatch, names, expected):
+    _backend(monkeypatch, {"__tools__": names})
+    assert expected == IdaMcpBackend().capabilities.has_xrefs
 
 
 def test_protocol_level_error_raises(monkeypatch):
@@ -240,7 +310,7 @@ def test_truncated_download_failure_is_fatal(monkeypatch):
 
 
 def test_capabilities_derive_from_enabled_tools(monkeypatch):
-    _backend(monkeypatch, {"__tools__": ["decompile", "disasm", "list_funcs", "xrefs_to"]})
+    _backend(monkeypatch, {"__tools__": ["decompile", "disasm", "list_funcs", "xrefs_to", "callees"]})
     caps = IdaMcpBackend().capabilities
 
     assert caps.has_decompile
