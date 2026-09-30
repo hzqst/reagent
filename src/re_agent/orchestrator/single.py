@@ -100,6 +100,13 @@ def reverse_single(
             logger.info("Symbol proposal recorded for %s", result.target.address)
         except OSError as exc:
             logger.warning("Failed to record symbol proposal: %s", exc)
+    elif result.success or result.code:
+        logger.warning(
+            "No symbol proposal for %s; %s was not updated for this function. "
+            "Check the reverser response before running annotate.",
+            result.target.address,
+            symbols_path(Path(config.output.report_dir)),
+        )
 
     if session:
         session.record_result(result)

@@ -799,6 +799,7 @@ or project-specific validation commands.
 Default artifacts include:
 
 - `reports/re-agent/code/`: final generated code per function
+- `reports/re-agent/symbols.json`: accumulated symbol proposals, when provided
 - `reports/re-agent/logs/`: unique run directories with per-call prompts, responses, provider metadata and round results
 - `reports/re-agent/candidates/`: non-isolated candidate overlays
 - `reports/re-agent/knowledge-graph.json`: persistent evidence graph
@@ -806,6 +807,12 @@ Default artifacts include:
 
 The session file is atomically rewritten on save. Its `functions` map stores the
 latest state per address, while its `runs` list preserves recorded attempts.
+
+A successful code reconstruction can still lack a symbol proposal. When a run
+accepts or produces a candidate without one, `reverse` logs a warning with the
+function address and `symbols.json` path. That function's proposal is not updated;
+previously recorded proposals remain. Check the reverser response before running
+`annotate`.
 
 ## How it compares
 

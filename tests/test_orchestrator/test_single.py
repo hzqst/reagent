@@ -1,11 +1,15 @@
 """Tests for single function orchestrator."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from re_agent.backend.stub import StubBackend
 from re_agent.config.schema import ReAgentConfig
-from re_agent.core.models import FunctionTarget, ParityStatus, Verdict
+from re_agent.core.models import FunctionTarget, ParityStatus, SymbolProposal, Verdict
+from re_agent.core.symbols import record_symbol, symbols_path
 from re_agent.llm.protocol import Message
 from re_agent.orchestrator.single import reverse_single
 
@@ -40,7 +44,7 @@ def test_dry_run_smoke() -> None:
     assert config.orchestrator.max_review_rounds == 4
 
 
-def test_checker_protocol_error_is_reported_to_caller(tmp_path: Path) -> None:
+def test_checker_protocol_error_is_reported_to_caller(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     config = ReAgentConfig.create_default()
     config.project_profile.source_root = str(tmp_path / "source")
     config.output.report_dir = str(tmp_path / "reports")
@@ -58,6 +62,7 @@ def test_checker_protocol_error_is_reported_to_caller(tmp_path: Path) -> None:
     assert not result.success
     assert result.error == "Checker protocol error: expected PASS/FAIL, got 'maybe'"
     assert result.checker_verdict is None
+    assert "No symbol proposal" not in caplog.text
 
 
 def test_candidate_parity_is_blocking_and_uses_generated_body(tmp_path: Path) -> None:
@@ -97,7 +102,7 @@ def test_candidate_parity_is_blocking_and_uses_generated_body(tmp_path: Path) ->
     assert result.success is False
 
 
-def test_unknown_validation_blocks_acceptance_by_default(tmp_path: Path) -> None:
+def test_unknown_validation_blocks_acceptance_by_default(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "CTest.cpp").write_text(
@@ -126,6 +131,7 @@ def test_unknown_validation_blocks_acceptance_by_default(tmp_path: Path) -> None
     assert result.validation_verdict is not None
     assert result.validation_verdict.verdict == Verdict.UNKNOWN
     assert result.success is False
+    assert "No symbol proposal for 0x100" in caplog.text
 
 
 def test_candidate_with_leading_types_succeeds_when_checker_passes(tmp_path: Path) -> None:
@@ -164,7 +170,13 @@ def test_candidate_with_leading_types_succeeds_when_checker_passes(tmp_path: Pat
     assert Path(result.validation_verdict.overlay_file).exists()
 
 
-def test_explicitly_disabled_validation_does_not_block(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_symbol, existing_symbol", [(False, False), (False, True), (True, False)])
+def test_explicitly_disabled_validation_does_not_block(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    with_symbol: bool,
+    existing_symbol: bool,
+) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "CTest.cpp").write_text("void CTest::Foo() {}\n", encoding="utf-8")
@@ -178,11 +190,20 @@ def test_explicitly_disabled_validation_does_not_block(tmp_path: Path) -> None:
     config.parity.enabled = False
     config.validation.enabled = False
 
+    proposal_path = symbols_path(Path(config.output.report_dir))
+    old_proposals = b""
+    if existing_symbol:
+        record_symbol(proposal_path, "0x100", SymbolProposal(name="CTest::PreviousName"))
+        old_proposals = proposal_path.read_bytes()
+    response = "```cpp\nvoid CTest::Foo() {}\n```"
+    if with_symbol:
+        response += '\n```json\n{"symbol": {"name": "CTest::Foo"}}\n```'
+
     result = reverse_single(
         FunctionTarget("0x100", "CTest", "Foo"),
         config,
         StubBackend(),
-        _LLM("```cpp\nvoid CTest::Foo() {}\n```"),
+        _LLM(response),
         checker_llm=_LLM(
             "VERDICT: PASS\nSUMMARY: Looks right\nISSUES:\n- none\n"
             "FIX_INSTRUCTIONS:\n- none"
@@ -192,3 +213,22 @@ def test_explicitly_disabled_validation_does_not_block(tmp_path: Path) -> None:
     assert result.validation_verdict is not None
     assert result.validation_verdict.verdict == Verdict.UNKNOWN
     assert result.success is True
+    warnings = [record for record in caplog.records if "No symbol proposal" in record.getMessage()]
+    if with_symbol:
+        assert warnings == []
+        assert result.symbol is not None
+        assert result.symbol.name == "CTest::Foo"
+    else:
+        assert result.symbol is None
+        assert len(warnings) == 1
+        assert warnings[0].levelno == logging.WARNING
+        message = warnings[0].getMessage()
+        assert "0x100" in message
+        assert str(proposal_path) in message
+        assert "not updated for this function" in message
+        assert "reverser response" in message
+        assert "annotate" in message
+        if existing_symbol:
+            assert old_proposals == proposal_path.read_bytes()
+        else:
+            assert not proposal_path.exists()
