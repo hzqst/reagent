@@ -40,6 +40,26 @@ def test_dry_run_smoke() -> None:
     assert config.orchestrator.max_review_rounds == 4
 
 
+def test_checker_protocol_error_is_reported_to_caller(tmp_path: Path) -> None:
+    config = ReAgentConfig.create_default()
+    config.project_profile.source_root = str(tmp_path / "source")
+    config.output.report_dir = str(tmp_path / "reports")
+    config.output.log_dir = str(tmp_path / "logs")
+    config.orchestrator.investigation_enabled = False
+
+    result = reverse_single(
+        FunctionTarget("0x100", "CTest", "Foo"),
+        config,
+        StubBackend(),
+        _LLM("```cpp\nvoid CTest::Foo() {}\n```"),
+        checker_llm=_LLM('{"verdict": "maybe", "issues": []}'),
+    )
+
+    assert not result.success
+    assert result.error == "Checker protocol error: expected PASS/FAIL, got 'maybe'"
+    assert result.checker_verdict is None
+
+
 def test_candidate_parity_is_blocking_and_uses_generated_body(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()

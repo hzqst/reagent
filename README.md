@@ -54,6 +54,15 @@ independent conditions:
 
 This is conservative verification, not a proof of semantic equivalence.
 
+Checker replies should use `PASS` or `FAIL`. For JSON and legacy `VERDICT:` text
+replies, parsing ignores case and surrounding whitespace and also accepts
+`correct`, `ok`, `good`, and `verified` as `PASS`, or `incorrect` and `wrong` as
+`FAIL`. Missing, non-string, or unrecognized verdicts are protocol errors:
+`Checker protocol error: expected PASS/FAIL, got 'maybe'`. These errors stop the
+current fix loop and appear in the reversal result's `error` field, rather than
+triggering further code repair rounds. Objective verification, build/test
+validation, and parity gates still apply to normalized `PASS` verdicts.
+
 ## New in 0.4.0
 
 Build, test, and runtime validation now support argument arrays that execute

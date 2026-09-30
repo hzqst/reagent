@@ -1,6 +1,10 @@
 """Tests for the agent fix loop."""
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from re_agent.agents.loop import run_fix_loop
 from re_agent.backend.stub import StubBackend
 from re_agent.core.models import AsmResult, DecompileResult, FunctionTarget, Verdict
@@ -50,6 +54,41 @@ def test_loop_pass_first_round(tmp_path: object) -> None:
     assert result.checker_verdict.verdict == Verdict.PASS
     assert result.objective_verdict is not None
     assert result.objective_verdict.verdict == Verdict.PASS
+
+
+def test_loop_correct_verdict_passes_without_fix_rounds() -> None:
+    target = FunctionTarget(address="0x10001100", class_name="CFrustum", function_name="CalculateFrustum")
+    reverser = MockLLM(["```cpp\nvoid CFrustum::CalculateFrustum() {}\n```"])
+    checker = MockLLM([json.dumps({
+        "addr": target.address,
+        "function": "CFrustum::CalculateFrustum",
+        "verdict": "correct",
+        "issues": [],
+        "verified": ["Signature matches"],
+    })])
+
+    result = run_fix_loop(target, StubBackend(), reverser, checker, max_rounds=4, investigation_enabled=False)
+
+    assert result.success
+    assert result.rounds_used == 1
+    assert result.checker_verdict is not None
+    assert result.checker_verdict.verdict == Verdict.PASS
+    assert result.objective_verdict is not None
+    assert result.objective_verdict.verdict == Verdict.PASS
+    assert reverser._idx == 1
+    assert checker._idx == 1
+
+
+def test_loop_protocol_error_stops_without_fix_rounds() -> None:
+    target = FunctionTarget(address="0x100", class_name="CTest", function_name="Foo")
+    reverser = MockLLM(["```cpp\nvoid CTest::Foo() {}\n```"])
+    checker = MockLLM(['{"verdict": "maybe", "issues": []}'])
+
+    with pytest.raises(ValueError, match="Checker protocol error: expected PASS/FAIL, got 'maybe'"):
+        run_fix_loop(target, StubBackend(), reverser, checker, max_rounds=4, investigation_enabled=False)
+
+    assert reverser._idx == 1
+    assert checker._idx == 1
 
 
 def test_loop_fail_then_pass(tmp_path: object) -> None:
@@ -127,7 +166,8 @@ void CTrain::ProcessControl() {
         )
 
 
-def test_loop_objective_verifier_blocks_false_pass() -> None:
+@pytest.mark.parametrize("checker_verdict", ["PASS", "correct"])
+def test_loop_objective_verifier_blocks_false_pass(checker_verdict: str) -> None:
     target = FunctionTarget(address="0x6F86A0", class_name="CTrain", function_name="ProcessControl")
     backend = StructuralBackend()
 
@@ -138,8 +178,8 @@ def test_loop_objective_verifier_blocks_false_pass() -> None:
         "REVERSED_FUNCTION: CTrain::ProcessControl (0x6F86A0)",
     ]
     checker_responses = [
-        "VERDICT: PASS\nSUMMARY: Looks good\nISSUES:\n- none\nFIX_INSTRUCTIONS:\n- none",
-        "VERDICT: PASS\nSUMMARY: Looks good\nISSUES:\n- none\nFIX_INSTRUCTIONS:\n- none",
+        json.dumps({"verdict": checker_verdict, "summary": "Looks good", "issues": []}),
+        json.dumps({"verdict": checker_verdict, "summary": "Looks good", "issues": []}),
     ]
 
     rev_llm = MockLLM(reverser_responses)

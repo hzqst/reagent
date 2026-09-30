@@ -15,12 +15,31 @@ from re_agent.llm.protocol import LLMProvider, Message
 from re_agent.utils.templates import render_template
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-VERDICT_RE = re.compile(r"VERDICT:\s*(PASS|FAIL)", re.I)
+VERDICT_RE = re.compile(r"^[ \t]*VERDICT:[ \t]*([^\r\n]*)", re.I | re.MULTILINE)
 SUMMARY_RE = re.compile(r"SUMMARY:\s*(.+)")
 ISSUES_RE = re.compile(r"ISSUES:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
 FIX_RE = re.compile(r"FIX_INSTRUCTIONS:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
 SYMBOL_ISSUES_RE = re.compile(r"SYMBOL_ISSUES:\s*\n((?:\s*-\s*.+\n?)+)", re.I)
 FENCE_RE = re.compile(r"```[ \t]*(?:json)?[ \t]*\r?\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_VERDICT_ALIASES = {
+    "PASS": Verdict.PASS,
+    "CORRECT": Verdict.PASS,
+    "OK": Verdict.PASS,
+    "GOOD": Verdict.PASS,
+    "VERIFIED": Verdict.PASS,
+    "FAIL": Verdict.FAIL,
+    "INCORRECT": Verdict.FAIL,
+    "WRONG": Verdict.FAIL,
+}
+
+
+def _normalize_verdict(raw_verdict: object) -> Verdict:
+    """Accept known verdict synonyms and reject protocol errors explicitly."""
+    if isinstance(raw_verdict, str):
+        verdict = _VERDICT_ALIASES.get(raw_verdict.strip().upper())
+        if verdict is not None:
+            return verdict
+    raise ValueError(f"Checker protocol error: expected PASS/FAIL, got {raw_verdict!r}")
 
 
 def _loads_dict(text: str) -> dict[str, Any] | None:
@@ -140,6 +159,9 @@ class CheckerAgent:
             target: The function being reversed.
             symbol: Optional proposed symbol, validated alongside the code.
             source_context: Harness-collected header/source evidence, not model claims.
+
+        Raises:
+            ValueError: The response lacks a recognized PASS/FAIL verdict.
         """
         decompile_result = self.backend.decompile(target.address)
         decompiled = decompile_result.raw_output
@@ -191,11 +213,7 @@ class CheckerAgent:
             return json_verdict
 
         verdict_match = VERDICT_RE.search(response)
-        if verdict_match:
-            verdict_str = verdict_match.group(1).upper()
-            verdict = Verdict.PASS if verdict_str == "PASS" else Verdict.FAIL
-        else:
-            verdict = Verdict.UNKNOWN
+        verdict = _normalize_verdict(verdict_match.group(1) if verdict_match else "<missing verdict>")
 
         summary_match = SUMMARY_RE.search(response)
         summary = summary_match.group(1).strip() if summary_match else ""
@@ -237,11 +255,7 @@ class CheckerAgent:
         payload = _extract_json_object(response)
         if payload is None:
             return None
-        raw_verdict = str(payload.get("verdict", "UNKNOWN")).upper()
-        verdict = {
-            "PASS": Verdict.PASS,
-            "FAIL": Verdict.FAIL,
-        }.get(raw_verdict, Verdict.UNKNOWN)
+        verdict = _normalize_verdict(payload.get("verdict", "<missing verdict>"))
         issues = payload.get("issues", [])
         fixes = payload.get("fix_instructions", [])
         symbol_issues = payload.get("symbol_issues", [])
@@ -253,7 +267,6 @@ class CheckerAgent:
         valid_review = (
             isinstance(status, str) and isinstance(declaration, str) and bool(declaration.strip())
             and isinstance(notes, list) and all(isinstance(note, str) for note in notes)
-            and verdict != Verdict.UNKNOWN
         )
         return CheckerVerdict(
             verdict=verdict,

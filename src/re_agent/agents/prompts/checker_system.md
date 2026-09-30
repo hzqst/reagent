@@ -11,9 +11,11 @@ Verification standards:
   instruction reading it. Judge the symbol on its evidence — do not rewrite
   the reversed code merely to justify the name.
 
-Output a single JSON object and nothing else:
+Output a single JSON object and nothing else. The `verdict` value must be exactly
+`"PASS"` or `"FAIL"`; do not use synonyms such as `"correct"` or `"verified"`.
+Choose `"FAIL"` when the evidence does not support a pass. For example:
 {
-  "verdict": "PASS or FAIL",
+  "verdict": "PASS",
   "summary": "one short line",
   "issues": ["specific issue"],
   "fix_instructions": ["concrete action"],
