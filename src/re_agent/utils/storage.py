@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -28,15 +29,18 @@ def atomic_json(path: Path, data: Any) -> None:
 def file_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(path.suffix + ".lock").open("a+b") as handle:
-        if os.name == "nt":
+        # sys.platform (not os.name) is the guard mypy recognises: it skips the
+        # branch that cannot run on the target platform, so neither the Windows
+        # nor the POSIX module is type-checked against the other platform's stubs.
+        if sys.platform == "win32":
             import msvcrt
 
             handle.seek(0)
             handle.write(b"0")
             handle.flush()
             handle.seek(0)
-            mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK  # type: ignore[attr-defined]
-            msvcrt.locking(handle.fileno(), mode, 1)  # type: ignore[attr-defined]
+            mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+            msvcrt.locking(handle.fileno(), mode, 1)
         else:
             import fcntl
 
@@ -44,8 +48,8 @@ def file_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
         try:
             yield
         finally:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(handle, fcntl.LOCK_UN)

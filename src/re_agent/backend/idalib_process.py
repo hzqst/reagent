@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +21,7 @@ class ProcessIdentity:
 def process_table() -> dict[int, ProcessIdentity]:
     """Return PID and creation identity so PID reuse cannot target another process."""
     result: dict[int, ProcessIdentity] = {}
-    if os.name == "nt":
+    if sys.platform == "win32":
         script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json"
         output = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -73,7 +74,9 @@ def kill_owned(identities: dict[int, ProcessIdentity]) -> None:
     for identity in identities.values():
         if not same_process(identity, table):
             continue
-        if os.name == "nt":
+        # sys.platform is the guard mypy recognises, so the POSIX-only
+        # signal.SIGKILL branch is not checked against the Windows stubs.
+        if sys.platform == "win32":
             subprocess.run(
                 ["taskkill", "/PID", str(identity.pid), "/F"],
                 capture_output=True, check=False, timeout=10,
@@ -99,7 +102,7 @@ def owns_listener(pid: int, port: int) -> bool:
             except OSError:
                 continue
         return False
-    if os.name == "nt":
+    if sys.platform == "win32":
         output = subprocess.run(
             ["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True, check=True, timeout=10,
         ).stdout

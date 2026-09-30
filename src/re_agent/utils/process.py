@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Sequence
 
 
@@ -80,12 +81,14 @@ def run_process(
             stdout=stdout,
             stderr=stderr,
             text=True,
-            start_new_session=os.name != "nt",
+            start_new_session=sys.platform != "win32",
         )
         try:
             proc.communicate(input_text, timeout=timeout_s)
         except BaseException:
-            if os.name == "nt":
+            # sys.platform is the guard mypy recognises, so the POSIX-only
+            # signal.SIGKILL branch is not checked against the Windows stubs.
+            if sys.platform == "win32":
                 subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False)
             else:
                 with contextlib.suppress(ProcessLookupError):
