@@ -58,6 +58,99 @@ def _plain_decompile(code="x"):
     }
 
 
+_CALL_ADDRESSES = ["10001467", "100014b5", "10001503", "10001551", "1000159f", "100015ed"]
+_CALL_LINES = [f"{address}  call NormalizeFrustumPlane" for address in _CALL_ADDRESSES]
+_CALL_ROWS = [{"addr": address, "instruction": "call NormalizeFrustumPlane"} for address in _CALL_ADDRESSES]
+
+
+def _repeated_calls_backend(monkeypatch):
+    """Six call sites to a single callee, using the current IDA response shape."""
+    responses = _plain_decompile("void f() { " + "NormalizeFrustumPlane(); " * 6 + "}")
+    responses.update({
+        "__tools__": ["decompile", "disasm"],
+        "callees": _ok({"result": [{"callees": [{"addr": "0x100010a0", "name": "NormalizeFrustumPlane"}]}]}),
+        "disasm": _ok({"addr": "0x10001100", "asm": {"lines": _CALL_ROWS}, "instruction_count": 6,
+                       "cursor": {"done": True}}),
+    })
+    _backend(monkeypatch, responses)
+    return IdaMcpBackend()
+
+
+@pytest.mark.parametrize("asm", [
+    "\n".join(_CALL_LINES), _CALL_LINES, {"lines": _CALL_LINES}, {"lines": _CALL_ROWS},
+])
+def test_disasm_counts_repeated_call_sites_in_supported_formats(monkeypatch, asm):
+    _backend(monkeypatch, {"disasm": _ok({"addr": "0x10001100", "asm": asm, "instruction_count": 6})})
+
+    result = IdaMcpBackend().get_asm("0x10001100")
+
+    assert result is not None
+    assert result.address == "0x10001100"
+    assert result.call_count == 6
+    assert result.instruction_count == 6
+    assert result.instructions == "\n".join(_CALL_LINES)
+
+
+@pytest.mark.parametrize("instruction, expected", [
+    ("10001119  call sub_100010a0", 1),
+    ("\t140001119\tCaLl qword ptr [rax+8]", 1),
+    ("0x140001119:  CALL rax", 1),
+    ("  call near ptr sub_100010a0", 1),
+    ("CALLBACK: nop", 0),
+    ("CALL: nop", 0),
+    ("10001119  mov eax, call_counter ; call sub_100010a0", 0),
+    ("10001119  ; call sub_100010a0", 0),
+    ("; CALL sub_100010a0", 0),
+    ("10001119  ret", 0),
+])
+def test_disasm_counts_only_call_mnemonics(monkeypatch, instruction, expected):
+    _backend(monkeypatch, {"disasm": _ok({"asm": instruction})})
+
+    result = IdaMcpBackend().get_asm("0x10001100")
+
+    assert result is not None
+    assert expected == result.call_count
+
+
+def test_disasm_counts_indirect_calls_and_ignores_row_metadata(monkeypatch):
+    rows = [
+        {"addr": "10001100", "instruction": "mov eax, ecx", "label": "call_helper", "comments": ["call"]},
+        {"addr": "10001102", "instruction": "call eax"},
+        {"addr": "10001104", "instruction": "CALL dword ptr [ecx+8]"},
+        {"addr": "10001107", "instruction": "ret"},
+    ]
+    _backend(monkeypatch, {"disasm": _ok({"asm": {"lines": rows}})})
+
+    result = IdaMcpBackend().get_asm("0x10001100")
+
+    assert result is not None
+    assert result.call_count == 2
+    assert result.instruction_count == 4
+
+
+@pytest.mark.parametrize("rows", [[42], [{"addr": "10001119", "opcode": "call"}],
+                                  [_CALL_ROWS[0], {"instruction": ["call"]}]])
+def test_disasm_rejects_unsupported_rows_instead_of_reporting_zero_calls(monkeypatch, rows):
+    _backend(monkeypatch, {"disasm": _ok({"asm": {"lines": rows}})})
+
+    with pytest.raises(RuntimeError, match="unsupported instruction row"):
+        IdaMcpBackend().get_asm("0x10001100")
+
+
+@pytest.mark.parametrize("asm", [None, {}, {"lines": []}])
+def test_unavailable_disassembly_is_not_zero_call_evidence(monkeypatch, asm):
+    _backend(monkeypatch, {"disasm": _ok({"asm": asm})})
+
+    assert IdaMcpBackend().get_asm("0x10001100") is None
+
+
+def test_disasm_rejects_incomplete_instruction_pages(monkeypatch):
+    _backend(monkeypatch, {"disasm": _ok({"asm": {"lines": _CALL_ROWS}, "cursor": {"next": 5000}})})
+
+    with pytest.raises(RuntimeError, match="disassembly is incomplete.*0x10001100"):
+        IdaMcpBackend().get_asm("0x10001100")
+
+
 def test_structured_signature_reaches_the_model_evidence(monkeypatch):
     responses = _plain_decompile()
     responses["__tools__"] = ["py_eval", "decompile"]

@@ -7,6 +7,7 @@ shelling out to a CLI.  Only the read-only evidence tools are used.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -40,6 +41,12 @@ _XREF_TYPE_MAP = {"code": "CALL", "data": "DATA"}
 _PAGE_LIMIT = 100
 
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+# IDA listings may prefix each instruction with a hex address. Match the
+# mnemonic itself so operands, comments, and labels cannot inflate the count.
+_CALL_INSTRUCTION_RE = re.compile(
+    r"^[ \t]*(?:(?:0x)?[0-9a-f]+:?[ \t]+)?CALL(?=[ \t\r]|$)", re.IGNORECASE | re.MULTILINE,
+)
 
 
 class McpTransportError(RuntimeError):
@@ -436,16 +443,20 @@ class IdaMcpBackend:
         if not isinstance(payload, dict) or payload.get("error"):
             return None
 
+        cursor = payload.get("cursor")
+        if isinstance(cursor, dict) and (cursor.get("next") is not None or cursor.get("done") is False):
+            raise RuntimeError(f"IDA disassembly is incomplete for {target}: more instruction pages are available")
+
         asm = payload.get("asm")
         instructions = _render_asm(asm)
-        if not instructions:
+        if not instructions.strip():
             return None
         count = payload.get("instruction_count")
         return AsmResult(
             address=str(payload.get("addr") or target),
             instructions=instructions,
             instruction_count=int(count) if isinstance(count, int) else len(instructions.splitlines()),
-            call_count=sum(1 for line in instructions.splitlines() if line.strip().upper().startswith("CALL")),
+            call_count=len(_CALL_INSTRUCTION_RE.findall(instructions)),
             has_fp_sensitive=has_fp_asm(instructions),
         )
 
@@ -586,12 +597,22 @@ def _render_asm(asm: Any) -> str:
     if isinstance(asm, str):
         return asm
     if isinstance(asm, list):
-        return "\n".join(str(entry) for entry in asm)
+        lines: list[str] = []
+        for entry in asm:
+            if isinstance(entry, str):
+                lines.append(entry)
+                continue
+            if not isinstance(entry, dict) or not isinstance(entry.get("instruction"), str):
+                raise RuntimeError("IDA disassembly contains an unsupported instruction row")
+            address = entry.get("addr")
+            if address is not None and not isinstance(address, str):
+                raise RuntimeError("IDA disassembly contains an unsupported instruction row")
+            instruction = entry["instruction"]
+            lines.append(f"{address}  {instruction}" if address else instruction)
+        return "\n".join(lines)
     if isinstance(asm, dict):
         for key in ("lines", "instructions", "asm", "code"):
             value = asm.get(key)
-            if isinstance(value, str):
-                return value
-            if isinstance(value, list):
-                return "\n".join(str(entry) for entry in value)
+            if isinstance(value, (str, list)):
+                return _render_asm(value)
     return ""

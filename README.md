@@ -389,6 +389,11 @@ with available decompile, assembly, CFG, and normalized high P-code evidence.
 It returns `FAIL` only for strong mismatches; insufficient evidence returns
 `UNKNOWN`.
 
+IDA assembly call counts use `CALL` instruction sites, including indirect calls
+and repeated calls to the same target. Text listings and structured instruction
+rows are supported. Unsupported row formats and responses with more instruction
+pages are treated as unavailable assembly evidence, rather than zero-call evidence.
+
 The reversal pipeline runs the 11 built-in heuristic parity signals and configured
 semantic rules against the generated candidate body on every round. RED is blocking by default; YELLOW can be made
 blocking with `validation.parity_fail_on_yellow`.

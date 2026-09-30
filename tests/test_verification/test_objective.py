@@ -8,6 +8,22 @@ import pytest
 from re_agent.backend.protocol import BackendCapabilities
 from re_agent.core.models import AnalysisArtifact, DecompileResult, FunctionTarget, Verdict
 from re_agent.verification.objective import verify_candidate
+from tests.test_backend.test_ida_mcp import _repeated_calls_backend
+
+
+@pytest.mark.parametrize("source_calls, expected", [(6, Verdict.PASS), (0, Verdict.FAIL)])
+def test_ida_repeated_call_sites_detect_missing_candidate_calls(monkeypatch, source_calls, expected):
+    backend = _repeated_calls_backend(monkeypatch)
+
+    result = verify_candidate(
+        "void f() { " + "NormalizeFrustumPlane(); " * source_calls + "}",
+        FunctionTarget("0x10001100", "", "f"),
+        backend,
+    )
+
+    assert expected == result.verdict
+    if expected == Verdict.FAIL:
+        assert "ASM call mismatch: disassembly has 6 calls, candidate has 0" in result.findings
 
 
 class _ErrorIRBackend:
