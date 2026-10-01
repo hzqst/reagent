@@ -311,18 +311,25 @@ recovery:
 
 ### Additional evidence: `--evidence` and `--evidence-dirs`
 
-By default the recovery agent sees only the selected IDB functions and whatever
-the operator passes on the command line:
+By default the recovery agent sees only the selected IDB functions. Two options
+point it at related files on disk:
 
-- `--evidence <file>` reads one file (repeatable). This is the original channel
-  and is unchanged.
-- `--evidence-dirs <path-or-glob>` reads many files at once (repeatable). Each
+- `--evidence <file>` names one file (repeatable). The file must exist.
+- `--evidence-dirs <path-or-glob>` names many files at once (repeatable). Each
   value is a glob relative to the run's working directory. A directory is
   expanded recursively; results are filtered by
   `project_profile.source_extensions` unless the value names a file literally.
   A value that matches nothing is an error, so a typo cannot look like a
   successful injection. Both `--evidence-dirs` and `--evidence_dirs` spellings
   are accepted.
+
+Both options are **references, not injection**: their content is not pushed into
+the prompt. The initial state lists the files under `evidence_files`, and each
+file's parent directory is added as a readable root, so the agent reads them
+itself with the file tools below. This keeps the prompt small even when pointing
+at a large tree. The only content still injected verbatim is a configured
+`recovery.runner_prompt_file`, and any `--include-candidates` overlay (a single
+untrusted candidate the agent is meant to critique).
 
 ### Filesystem tools: `recovery.file_roots`
 
@@ -336,13 +343,17 @@ read-only tools so it can look things up on demand:
 | `grep` | Regex-search files under a root; returns root/file/line. |
 | `glob` | List files matching a glob under a root. |
 
-Each root must exist, or the run fails before dispatching anything. Every path
-the model requests is resolved against the roots and rejected if it escapes
-them (absolute paths, `..`, and symlinks pointing outside all count as escapes).
-Output is bounded (match counts, line counts, bytes) so a broad query cannot
-flood the model's context. The tools are added to the catalog only when at least
-one root is configured; with `file_roots: []` the agent has no filesystem access
-at all, and requests for `read`/`grep`/`glob` are denied like any unknown tool.
+Each configured root must exist, or the run fails before dispatching anything.
+Every path the model requests is resolved against the roots and rejected if it
+escapes them (`..` and symlinks pointing outside all count as escapes; an
+absolute path is accepted only when it is already inside a root, which is how
+`evidence_files` are read). Output is bounded (match counts, line counts, bytes)
+so a broad query cannot flood the model's context.
+
+The tools are registered when there is at least one root — configured via
+`file_roots`, or derived from the directories of `--evidence` / `--evidence-dirs`
+files. With neither, the agent has no filesystem access at all, and requests for
+`read`/`grep`/`glob` are denied like any unknown tool.
 
 File content is treated as data, never as instructions: the recovery system
 prompt states that tool results and file text cannot expand the agent's

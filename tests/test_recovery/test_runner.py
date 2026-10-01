@@ -138,6 +138,12 @@ def _file_run(tmp_path: Path, llm: Mock, backend: Mock, roots: list[str], **kwar
     return run_recovery(llm, backend, ["0x401000"], settings, tmp_path / "run.json", **kwargs)
 
 
+def _evidence_run(tmp_path: Path, llm: Mock, backend: Mock, evidence_files: list[Path]) -> dict:
+    settings = RecoveryConfig(max_steps=4)
+    return run_recovery(llm, backend, ["0x401000"], settings, tmp_path / "run.json",
+                        evidence_files=evidence_files)
+
+
 def test_file_tools_absent_and_denied_without_roots(tmp_path: Path) -> None:
     backend = client()
     llm = provider({"action": "tool", "name": "read", "arguments": {"path": "a.h"}}, finish())
@@ -169,6 +175,22 @@ def test_missing_file_root_fails_before_any_dispatch(tmp_path: Path) -> None:
     result = _file_run(tmp_path, provider(finish()), backend, roots=[str(tmp_path / "nope")])
     assert result["status"] == "failed"
     assert "not a directory" in result["error"]
+
+
+def test_evidence_files_enable_tools_and_become_readable_roots(tmp_path: Path) -> None:
+    note = tmp_path / "evidence" / "note.md"
+    note.parent.mkdir()
+    note.write_text("CFrustum is 96 bytes.\n", encoding="utf-8")
+    backend = client()
+    llm = provider({"action": "tool", "name": "read", "arguments": {"path": str(note)}}, finish())
+    result = _evidence_run(tmp_path, llm, backend, [note])
+    payload = _initial_payload(llm)
+    assert {"read", "grep", "glob"}.issubset({tool["name"] for tool in payload["tools"]})
+    assert payload["evidence_files"] == [str(note)]
+    assert str(note.parent.resolve()) in payload["file_roots"]  # directory auto-added as a root
+    assert result["events"][0]["status"] == "ok"
+    assert "96 bytes" in result["events"][0]["result"]["content"]
+    backend.call.assert_not_called()
 
 
 def test_response_parser_accepts_single_action_but_not_multiple() -> None:

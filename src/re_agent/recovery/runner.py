@@ -55,6 +55,7 @@ def run_recovery(
     write: bool = False,
     save: bool = False,
     evidence: str = "",
+    evidence_files: list[Path] | None = None,
     objective: str = "Recover evidence-supported class pointers, vtable pointers and virtual calls.",
 ) -> dict[str, Any]:
     """Run a backend-specific agent without constructing symbol proposals.
@@ -76,7 +77,8 @@ def run_recovery(
     with file_lock(report_path):
         atomic_json(report_path, report)
         try:
-            _run(provider, client, addresses, settings, report_path, report, write, save, evidence)
+            _run(provider, client, addresses, settings, report_path, report, write, save, evidence,
+                 evidence_files or [])
         except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
             report.update(status="failed", error=str(exc))
         except KeyboardInterrupt:
@@ -87,12 +89,17 @@ def run_recovery(
 
 
 def _file_roots_and_catalog(
-    settings: RecoveryConfig, catalog: list[dict[str, Any]],
+    settings: RecoveryConfig, evidence_files: list[Path], catalog: list[dict[str, Any]],
 ) -> tuple[list[Path], list[dict[str, Any]]]:
-    """Resolve configured file roots and, if any, add the read/grep/glob tools.
+    """Resolve the readable roots and, if any, add the read/grep/glob tools.
 
-    A configured root that does not exist is a hard error: silently dropping it
-    would leave the agent believing it has access it does not.
+    Roots come from two places: ``recovery.file_roots`` (operator-selected
+    reference trees) and the parent directories of ``evidence_files``. Because
+    ``--evidence`` names files rather than injecting their content, the agent
+    must be able to read them; deriving a root from each evidence file's
+    directory is what makes that automatic. A configured root that does not
+    exist is a hard error: silently dropping it would leave the agent believing
+    it has access it does not.
     """
     roots: list[Path] = []
     for raw in settings.file_roots:
@@ -100,21 +107,31 @@ def _file_roots_and_catalog(
         if not path.is_dir():
             raise ValueError(f"recovery.file_roots entry is not a directory: {raw!r}")
         roots.append(path)
-    if not roots:
+    for evidence in evidence_files:
+        if evidence.is_file():
+            roots.append(evidence.resolve().parent)
+    # A specific root makes a broader root's files reachable anyway; keep the
+    # most specific, deduplicating while preserving order.
+    ordered: list[Path] = []
+    for root in roots:
+        if root not in ordered:
+            ordered.append(root)
+    if not ordered:
         return [], catalog
-    return roots, [*catalog, *files.FILE_TOOL_DEFS]
+    return ordered, [*catalog, *files.FILE_TOOL_DEFS]
 
 
 def _run(
     provider: LLMProvider, client: IdaRecoveryClient, addresses: list[str], settings: RecoveryConfig,
     report_path: Path, report: dict[str, Any], write: bool, save: bool, evidence: str,
+    evidence_files: list[Path],
 ) -> None:
     health = client.health()
     report["database"] = health
     report["before"] = client.snapshot(addresses)
     allowed = READ_TOOLS | WRITE_TOOLS if write else READ_TOOLS
     catalog = [t for t in client.tools() if t.get("name") in allowed]
-    file_roots, catalog = _file_roots_and_catalog(settings, catalog)
+    file_roots, catalog = _file_roots_and_catalog(settings, evidence_files, catalog)
     tool_names = {t["name"] for t in catalog}
     system = render_template(PROMPT)
     initial = {
@@ -122,6 +139,10 @@ def _run(
         "database": health, "initial_state": report["before"], "evidence": evidence,
         "tools": catalog, "max_steps": settings.max_steps,
     }
+    if evidence_files:
+        # Content is not inlined; point the agent at the files and let it read
+        # them with the file tools (their directories are readable roots).
+        initial["evidence_files"] = [str(path) for path in evidence_files]
     if file_roots:
         initial["file_roots"] = files.tree(file_roots)
     # Native conversation state avoids replaying the growing catalog/transcript

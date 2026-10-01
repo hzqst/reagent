@@ -138,6 +138,10 @@ def _reference_tree(tmp_path: Path) -> Path:
     return refs
 
 
+def _names(paths: list) -> set[str]:
+    return {Path(p).name for p in paths}
+
+
 def test_recovery_evidence_dirs_expand_recursively_with_extension_filter(tmp_path: Path) -> None:
     refs = _reference_tree(tmp_path)
     config = _reference_config(tmp_path)
@@ -148,10 +152,9 @@ def test_recovery_evidence_dirs_expand_recursively_with_extension_filter(tmp_pat
          patch(f"{module}.run_recovery", return_value={"status": "planned"}) as run:
         assert main(["recover-types", "--address", "0x401000", "--evidence-dirs", str(refs),
                      "--output", str(tmp_path / "r.json")]) == 0
-    evidence = run.call_args.kwargs["evidence"]
-    assert "struct Header {};" in evidence          # .h kept and read
-    assert "void impl() {}" in evidence             # nested .cpp found recursively
-    assert "ignore me" not in evidence              # .txt filtered out by source_extensions
+    files = run.call_args.kwargs["evidence_files"]
+    assert _names(files) == {"keep.h", "impl.cpp"}       # .txt filtered out by source_extensions
+    assert run.call_args.kwargs["evidence"] == ""        # content is not injected
 
 
 def test_recovery_evidence_dirs_accept_glob_and_underscore_spelling(tmp_path: Path) -> None:
@@ -165,9 +168,7 @@ def test_recovery_evidence_dirs_accept_glob_and_underscore_spelling(tmp_path: Pa
         assert main(["recover-types", "--address", "0x401000",
                      "--evidence_dirs", str(refs / "sub" / "*.cpp"),
                      "--output", str(tmp_path / "r.json")]) == 0
-    evidence = run.call_args.kwargs["evidence"]
-    assert "void impl() {}" in evidence
-    assert "struct Header {};" not in evidence      # glob restricted to *.cpp
+    assert _names(run.call_args.kwargs["evidence_files"]) == {"impl.cpp"}
 
 
 def test_recovery_evidence_dirs_glob_still_applies_extension_filter(tmp_path: Path) -> None:
@@ -181,9 +182,32 @@ def test_recovery_evidence_dirs_glob_still_applies_extension_filter(tmp_path: Pa
         # A broad glob is not a literal file: .txt must be filtered out.
         assert main(["recover-types", "--address", "0x401000", "--evidence-dirs", str(refs / "*"),
                      "--output", str(tmp_path / "r.json")]) == 0
-    evidence = run.call_args.kwargs["evidence"]
-    assert "void impl() {}" in evidence or "struct Header {};" in evidence
-    assert "ignore me" not in evidence
+    assert "notes.txt" not in _names(run.call_args.kwargs["evidence_files"])
+
+
+def test_recovery_evidence_is_referenced_by_path(tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    note.write_text("# Fact\nCFrustum is 96 bytes.\n", encoding="utf-8")
+    config = _reference_config(tmp_path)
+    module = "re_agent.cli.cmd_recover_types"
+    with patch(f"{module}.load_config", return_value=config), \
+         patch(f"{module}.create_recovery_provider", return_value=Mock()), \
+         patch(f"{module}.IdaRecoveryClient"), \
+         patch(f"{module}.run_recovery", return_value={"status": "planned"}) as run:
+        assert main(["recover-types", "--address", "0x401000", "--evidence", str(note),
+                     "--output", str(tmp_path / "r.json")]) == 0
+    assert _names(run.call_args.kwargs["evidence_files"]) == {"note.md"}
+    assert "96 bytes" not in run.call_args.kwargs["evidence"]   # not inlined
+
+
+def test_recovery_rejects_missing_evidence_file(tmp_path: Path) -> None:
+    config = _reference_config(tmp_path)
+    module = "re_agent.cli.cmd_recover_types"
+    with patch(f"{module}.load_config", return_value=config), \
+         patch(f"{module}.create_recovery_provider") as factory:
+        assert main(["recover-types", "--address", "0x401000", "--evidence", str(tmp_path / "nope.md"),
+                     "--output", str(tmp_path / "r.json")]) == 1
+    factory.assert_not_called()
 
 
 def test_recovery_errors_when_evidence_dirs_match_nothing(tmp_path: Path) -> None:

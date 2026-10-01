@@ -19,7 +19,7 @@ from re_agent.utils.storage import atomic_json
 from re_agent.verification.candidate import discover_candidate_files
 
 
-def _expand_evidence_dirs(patterns: list[str], extensions: list[str]) -> list[Path]:
+def expand_evidence_dirs(patterns: list[str], extensions: list[str]) -> list[Path]:
     """Expand directory/glob targets into a sorted, extension-filtered file list.
 
     Each target is a glob relative to the run's cwd. A directory is expanded
@@ -61,14 +61,28 @@ def cmd_recover_types(args: argparse.Namespace) -> int:
     if config.recovery is None:
         raise ValueError("recover-types requires an independent recovery provider/model configuration")
     addresses = list(dict.fromkeys(hex(int(checked_address(address), 16)) for address in args.address))
-    evidence = []
-    for path in [*args.evidence, *([config.recovery.runner_prompt_file] if config.recovery.runner_prompt_file else [])]:
-        evidence.append(f"Evidence file: {path}\n{Path(path).read_text(encoding='utf-8')}")
-    dir_files = _expand_evidence_dirs(args.evidence_dirs, config.project_profile.source_extensions)
+    # --evidence / --evidence-dirs list files; the recovery agent reads them
+    # itself through the host-side read/grep/glob tools instead of having their
+    # whole content pushed into the prompt. Each file's directory becomes a
+    # readable root so those tools can reach it.
+    evidence_files = [Path(raw) for raw in args.evidence]
+    for path in evidence_files:
+        if not path.is_file():
+            raise ValueError(f"--evidence path is not a file: {path}")
+    dir_files = expand_evidence_dirs(args.evidence_dirs, config.project_profile.source_extensions)
     if dir_files:
-        print(f"[recover-types] including {len(dir_files)} file(s) from --evidence-dirs as evidence", file=sys.stderr)
-    for path in dir_files:
-        evidence.append(f"Evidence file: {path}\n{path.read_text(encoding='utf-8')}")
+        print(f"[recover-types] pointing the agent at {len(dir_files)} file(s) from --evidence-dirs", file=sys.stderr)
+    evidence_files.extend(dir_files)
+    # The configured runner prompt is still injected verbatim: it is the only
+    # way an operator's own runner prompt reaches recovery (the provider
+    # overrides it with the recovery prompt), so it is not path-referenced.
+    evidence = []
+    runner_prompt = config.recovery.runner_prompt_file
+    if runner_prompt:
+        evidence.append(f"Evidence file: {runner_prompt}\n{Path(runner_prompt).read_text(encoding='utf-8')}")
+    if evidence_files:
+        print("[recover-types] evidence is referenced by path; the agent reads it with read/grep/glob",
+              file=sys.stderr)
     # Candidate overlays from an earlier reverse run are untrusted inferences
     # about the same functions. They are injected only on explicit request so a
     # preview can stay an unpolluted look at the IDB, and so a write run can
@@ -103,7 +117,7 @@ def cmd_recover_types(args: argparse.Namespace) -> int:
                               Path(config.output.log_dir) / "idalib") as client:
             report = run_recovery(provider, client, addresses, config.recovery, report_path,
                                   write=args.write, save=args.save, evidence="\n\n".join(evidence),
-                                  objective=args.objective)
+                                  evidence_files=evidence_files, objective=args.objective)
     except IdalibLifecycleError as exc:
         if report is not None:
             report["status"] = "failed"
