@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import logging
 import sys
 import uuid
@@ -18,6 +19,37 @@ from re_agent.utils.storage import atomic_json
 from re_agent.verification.candidate import discover_candidate_files
 
 
+def _expand_evidence_dirs(patterns: list[str], extensions: list[str]) -> list[Path]:
+    """Expand directory/glob targets into a sorted, extension-filtered file list.
+
+    Each target is a glob relative to the run's cwd. A directory is expanded
+    recursively. Results are filtered by ``extensions`` so a broad glob cannot
+    pull in non-source files; only a *literal* file path (no glob metacharacter)
+    is kept regardless of its extension, so naming one file explicitly always
+    works. A target that matches nothing is an error: a silent no-op would look
+    like successful injection.
+    """
+    allowed = {ext.lower() for ext in extensions}
+    seen: set[str] = set()
+    files: list[Path] = []
+    for pattern in patterns:
+        matches = [Path(match) for match in glob.glob(pattern, recursive=True)]
+        candidates = [match for match in matches if match.is_file()]
+        for directory in (match for match in matches if match.is_dir()):
+            candidates.extend(sorted(path for path in directory.rglob("*") if path.is_file()))
+        if not candidates:
+            raise ValueError(f"--evidence-dirs pattern matched no files: {pattern!r}")
+        literal_file = not any(ch in pattern for ch in "*?[") and len(candidates) == 1
+        for path in candidates:
+            if not literal_file and path.suffix.lower() not in allowed:
+                continue
+            key = str(path.resolve())
+            if key not in seen:
+                seen.add(key)
+                files.append(path)
+    return files
+
+
 def cmd_recover_types(args: argparse.Namespace) -> int:
     """Investigate by default; require explicit write/save authorization."""
     if args.save and not args.write:
@@ -32,6 +64,11 @@ def cmd_recover_types(args: argparse.Namespace) -> int:
     evidence = []
     for path in [*args.evidence, *([config.recovery.runner_prompt_file] if config.recovery.runner_prompt_file else [])]:
         evidence.append(f"Evidence file: {path}\n{Path(path).read_text(encoding='utf-8')}")
+    dir_files = _expand_evidence_dirs(args.evidence_dirs, config.project_profile.source_extensions)
+    if dir_files:
+        print(f"[recover-types] including {len(dir_files)} file(s) from --evidence-dirs as evidence", file=sys.stderr)
+    for path in dir_files:
+        evidence.append(f"Evidence file: {path}\n{path.read_text(encoding='utf-8')}")
     # Candidate overlays from an earlier reverse run are untrusted inferences
     # about the same functions. They are injected only on explicit request so a
     # preview can stay an unpolluted look at the IDB, and so a write run can

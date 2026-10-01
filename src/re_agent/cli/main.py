@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     recovery_p.add_argument("--address", action="append", required=True, help="Target function entry (repeatable)")
     recovery_p.add_argument("--evidence", action="append", default=[], help="Read additional evidence from a file")
     recovery_p.add_argument(
+        "--evidence-dirs", "--evidence_dirs", dest="evidence_dirs", action="append", default=[],
+        help="Read evidence from a directory (recursive) or glob pattern; "
+             "filtered by project_profile.source_extensions",
+    )
+    recovery_p.add_argument(
         "--objective", default="Recover evidence-supported class pointers, vtable pointers and virtual calls.",
         help="Recovery objective within the selected functions",
     )

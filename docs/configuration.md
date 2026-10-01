@@ -290,6 +290,64 @@ Proposals carry a `confidence` marker: `verified` when a header states the name,
 the comment records which one it was, so an inferred name can never be mistaken
 for a reviewed one.
 
+## Recovery Config
+
+The `recovery` section configures the independent type-recovery model (used by
+`recover-types`). It does not inherit `llm` or `agents`, and it does not load
+the workspace `CLAUDE.md` or scan any directory by itself.
+
+```yaml
+recovery:
+  provider: codex
+  model: gpt-6-sol
+  max_steps: 40
+  max_result_chars: 24000
+  # Read-only reference roots for the recovery agent's read/grep/glob tools.
+  # Empty (default) grants the agent no filesystem access.
+  file_roots:
+    - references/particleman_goldsrc_8684
+    - references/halflife-updated/cl_dll/particleman
+```
+
+### Additional evidence: `--evidence` and `--evidence-dirs`
+
+By default the recovery agent sees only the selected IDB functions and whatever
+the operator passes on the command line:
+
+- `--evidence <file>` reads one file (repeatable). This is the original channel
+  and is unchanged.
+- `--evidence-dirs <path-or-glob>` reads many files at once (repeatable). Each
+  value is a glob relative to the run's working directory. A directory is
+  expanded recursively; results are filtered by
+  `project_profile.source_extensions` unless the value names a file literally.
+  A value that matches nothing is an error, so a typo cannot look like a
+  successful injection. Both `--evidence-dirs` and `--evidence_dirs` spellings
+  are accepted.
+
+### Filesystem tools: `recovery.file_roots`
+
+`--evidence-dirs` injects a fixed snapshot up front. When the reference tree is
+large, `recovery.file_roots` instead gives the recovery agent three host-side
+read-only tools so it can look things up on demand:
+
+| Tool | Purpose |
+| --- | --- |
+| `read` | Read a UTF-8 file under a root, with `offset`/`limit` paging. |
+| `grep` | Regex-search files under a root; returns root/file/line. |
+| `glob` | List files matching a glob under a root. |
+
+Each root must exist, or the run fails before dispatching anything. Every path
+the model requests is resolved against the roots and rejected if it escapes
+them (absolute paths, `..`, and symlinks pointing outside all count as escapes).
+Output is bounded (match counts, line counts, bytes) so a broad query cannot
+flood the model's context. The tools are added to the catalog only when at least
+one root is configured; with `file_roots: []` the agent has no filesystem access
+at all, and requests for `read`/`grep`/`glob` are denied like any unknown tool.
+
+File content is treated as data, never as instructions: the recovery system
+prompt states that tool results and file text cannot expand the agent's
+permissions.
+
 ## Project Profile
 
 The `project_profile` section makes re-agent work across different RE projects.

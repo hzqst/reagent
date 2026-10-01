@@ -119,3 +119,79 @@ def test_unsupported_recovery_never_starts_model(backend: str, recovery: Recover
     with patch(f"{module}.load_config", return_value=config), patch(f"{module}.create_recovery_provider") as factory:
         assert main(["recover-types", "--address", "0x401000"]) == 1
     factory.assert_not_called()
+
+
+def _reference_config(tmp_path: Path) -> ReAgentConfig:
+    return ReAgentConfig(
+        backend=BackendConfig(type="ida-mcp"),
+        recovery=RecoveryConfig(provider="pi", model="test"),
+        output=OutputConfig(report_dir=str(tmp_path)),
+    )
+
+
+def _reference_tree(tmp_path: Path) -> Path:
+    refs = tmp_path / "refs"
+    (refs / "sub").mkdir(parents=True)
+    (refs / "keep.h").write_text("struct Header {};\n", encoding="utf-8")
+    (refs / "sub" / "impl.cpp").write_text("void impl() {}\n", encoding="utf-8")
+    (refs / "notes.txt").write_text("ignore me\n", encoding="utf-8")
+    return refs
+
+
+def test_recovery_evidence_dirs_expand_recursively_with_extension_filter(tmp_path: Path) -> None:
+    refs = _reference_tree(tmp_path)
+    config = _reference_config(tmp_path)
+    module = "re_agent.cli.cmd_recover_types"
+    with patch(f"{module}.load_config", return_value=config), \
+         patch(f"{module}.create_recovery_provider", return_value=Mock()), \
+         patch(f"{module}.IdaRecoveryClient"), \
+         patch(f"{module}.run_recovery", return_value={"status": "planned"}) as run:
+        assert main(["recover-types", "--address", "0x401000", "--evidence-dirs", str(refs),
+                     "--output", str(tmp_path / "r.json")]) == 0
+    evidence = run.call_args.kwargs["evidence"]
+    assert "struct Header {};" in evidence          # .h kept and read
+    assert "void impl() {}" in evidence             # nested .cpp found recursively
+    assert "ignore me" not in evidence              # .txt filtered out by source_extensions
+
+
+def test_recovery_evidence_dirs_accept_glob_and_underscore_spelling(tmp_path: Path) -> None:
+    refs = _reference_tree(tmp_path)
+    config = _reference_config(tmp_path)
+    module = "re_agent.cli.cmd_recover_types"
+    with patch(f"{module}.load_config", return_value=config), \
+         patch(f"{module}.create_recovery_provider", return_value=Mock()), \
+         patch(f"{module}.IdaRecoveryClient"), \
+         patch(f"{module}.run_recovery", return_value={"status": "planned"}) as run:
+        assert main(["recover-types", "--address", "0x401000",
+                     "--evidence_dirs", str(refs / "sub" / "*.cpp"),
+                     "--output", str(tmp_path / "r.json")]) == 0
+    evidence = run.call_args.kwargs["evidence"]
+    assert "void impl() {}" in evidence
+    assert "struct Header {};" not in evidence      # glob restricted to *.cpp
+
+
+def test_recovery_evidence_dirs_glob_still_applies_extension_filter(tmp_path: Path) -> None:
+    refs = _reference_tree(tmp_path)
+    config = _reference_config(tmp_path)
+    module = "re_agent.cli.cmd_recover_types"
+    with patch(f"{module}.load_config", return_value=config), \
+         patch(f"{module}.create_recovery_provider", return_value=Mock()), \
+         patch(f"{module}.IdaRecoveryClient"), \
+         patch(f"{module}.run_recovery", return_value={"status": "planned"}) as run:
+        # A broad glob is not a literal file: .txt must be filtered out.
+        assert main(["recover-types", "--address", "0x401000", "--evidence-dirs", str(refs / "*"),
+                     "--output", str(tmp_path / "r.json")]) == 0
+    evidence = run.call_args.kwargs["evidence"]
+    assert "void impl() {}" in evidence or "struct Header {};" in evidence
+    assert "ignore me" not in evidence
+
+
+def test_recovery_errors_when_evidence_dirs_match_nothing(tmp_path: Path) -> None:
+    config = _reference_config(tmp_path)
+    module = "re_agent.cli.cmd_recover_types"
+    with patch(f"{module}.load_config", return_value=config), \
+         patch(f"{module}.create_recovery_provider") as factory:
+        assert main(["recover-types", "--address", "0x401000",
+                     "--evidence-dirs", str(tmp_path / "does-not-exist"),
+                     "--output", str(tmp_path / "r.json")]) == 1
+    factory.assert_not_called()

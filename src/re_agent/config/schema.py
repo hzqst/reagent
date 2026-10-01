@@ -104,6 +104,10 @@ class RecoveryConfig(LLMConfig):
 
     max_steps: int = 40
     max_result_chars: int = 24000
+    # Directories the recovery agent may read through the host-side read/grep/glob
+    # tools. Empty (the default) leaves the recovery agent with no filesystem
+    # access at all: it then sees only --evidence and the IDB, exactly as before.
+    file_roots: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -9,6 +9,7 @@ from typing import Any
 
 from re_agent.config.schema import RecoveryConfig
 from re_agent.llm.protocol import LLMProvider, Message
+from re_agent.recovery import files
 from re_agent.recovery.ida import READ_TOOLS, WRITE_TOOLS, IdaRecoveryClient, tool_error
 from re_agent.utils.storage import atomic_json, file_lock
 from re_agent.utils.templates import render_template
@@ -85,6 +86,25 @@ def run_recovery(
     return report
 
 
+def _file_roots_and_catalog(
+    settings: RecoveryConfig, catalog: list[dict[str, Any]],
+) -> tuple[list[Path], list[dict[str, Any]]]:
+    """Resolve configured file roots and, if any, add the read/grep/glob tools.
+
+    A configured root that does not exist is a hard error: silently dropping it
+    would leave the agent believing it has access it does not.
+    """
+    roots: list[Path] = []
+    for raw in settings.file_roots:
+        path = Path(raw).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError(f"recovery.file_roots entry is not a directory: {raw!r}")
+        roots.append(path)
+    if not roots:
+        return [], catalog
+    return roots, [*catalog, *files.FILE_TOOL_DEFS]
+
+
 def _run(
     provider: LLMProvider, client: IdaRecoveryClient, addresses: list[str], settings: RecoveryConfig,
     report_path: Path, report: dict[str, Any], write: bool, save: bool, evidence: str,
@@ -94,6 +114,7 @@ def _run(
     report["before"] = client.snapshot(addresses)
     allowed = READ_TOOLS | WRITE_TOOLS if write else READ_TOOLS
     catalog = [t for t in client.tools() if t.get("name") in allowed]
+    file_roots, catalog = _file_roots_and_catalog(settings, catalog)
     tool_names = {t["name"] for t in catalog}
     system = render_template(PROMPT)
     initial = {
@@ -101,6 +122,8 @@ def _run(
         "database": health, "initial_state": report["before"], "evidence": evidence,
         "tools": catalog, "max_steps": settings.max_steps,
     }
+    if file_roots:
+        initial["file_roots"] = files.tree(file_roots)
     # Native conversation state avoids replaying the growing catalog/transcript
     # on CLI providers. API providers use the same Message contract as reverse.
     conversation = provider.new_conversation(system) if provider.supports_conversations else None
@@ -168,7 +191,8 @@ def _run(
             report["write_attempted"] = True
         atomic_json(report_path, report)
         try:
-            result = client.call(name, arguments)
+            result = (files.dispatch(file_roots, name, arguments)
+                      if name in files.FILE_TOOL_NAMES else client.call(name, arguments))
             event["result"] = result
             error = tool_error(result)
             if error:

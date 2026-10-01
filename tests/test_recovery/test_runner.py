@@ -128,6 +128,49 @@ def test_python_syntax_error_is_rejected_before_remote_dispatch(tmp_path: Path) 
     assert result["status"] == "verified"
 
 
+def _initial_payload(llm: Mock) -> dict:
+    history = llm.send.call_args_list[0].args[0]
+    return json.loads(history[1].content)  # history[0] is the system prompt
+
+
+def _file_run(tmp_path: Path, llm: Mock, backend: Mock, roots: list[str], **kwargs: object) -> dict:
+    settings = RecoveryConfig(max_steps=4, file_roots=roots)
+    return run_recovery(llm, backend, ["0x401000"], settings, tmp_path / "run.json", **kwargs)
+
+
+def test_file_tools_absent_and_denied_without_roots(tmp_path: Path) -> None:
+    backend = client()
+    llm = provider({"action": "tool", "name": "read", "arguments": {"path": "a.h"}}, finish())
+    result = _file_run(tmp_path, llm, backend, roots=[])
+    payload = _initial_payload(llm)
+    assert "read" not in {tool["name"] for tool in payload["tools"]}
+    assert "file_roots" not in payload
+    assert result["events"][0]["status"] == "denied"
+    backend.call.assert_not_called()
+
+
+def test_file_tools_present_and_dispatched_host_side(tmp_path: Path) -> None:
+    root = tmp_path / "refs"
+    root.mkdir()
+    (root / "a.h").write_text("struct A {};\n", encoding="utf-8")
+    backend = client()
+    llm = provider({"action": "tool", "name": "read", "arguments": {"path": "a.h"}}, finish())
+    result = _file_run(tmp_path, llm, backend, roots=[str(root)])
+    payload = _initial_payload(llm)
+    assert {"read", "grep", "glob"}.issubset({tool["name"] for tool in payload["tools"]})
+    assert str(root.resolve()) in payload["file_roots"]
+    assert result["events"][0]["status"] == "ok"
+    assert result["events"][0]["result"]["content"] == "struct A {};"
+    backend.call.assert_not_called()  # host-side tool, never routed to the IDB
+
+
+def test_missing_file_root_fails_before_any_dispatch(tmp_path: Path) -> None:
+    backend = client()
+    result = _file_run(tmp_path, provider(finish()), backend, roots=[str(tmp_path / "nope")])
+    assert result["status"] == "failed"
+    assert "not a directory" in result["error"]
+
+
 def test_response_parser_accepts_single_action_but_not_multiple() -> None:
     action = {"action": "tool", "name": "decompile", "arguments": {"addr": "0x401000"}}
     assert _parse_response("Inspect the target.\n" + json.dumps(action)) == action
