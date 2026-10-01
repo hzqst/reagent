@@ -63,6 +63,24 @@ def test_backup_precedes_first_write_and_verified_save(tmp_path: Path) -> None:
     assert names.index("backup") < names.index("call") < names.index("verify") < names.index("save")
 
 
+def test_declare_type_string_is_wrapped_as_single_list_item(tmp_path: Path) -> None:
+    # The IDA-MCP server comma-splits a string decls, which shreds any
+    # declaration containing a comma; the runner must send it as one list item.
+    backend = client()
+    decl = "struct C { void *vt; };"
+    llm = provider({"action": "tool", "name": "declare_type", "arguments": {"decls": decl}}, finish())
+    run(tmp_path, llm, backend, write=True)
+    assert backend.call.call_args.args == ("declare_type", {"decls": [decl]})
+
+
+def test_declare_type_list_is_left_unchanged(tmp_path: Path) -> None:
+    backend = client()
+    llm = provider({"action": "tool", "name": "declare_type", "arguments": {"decls": ["struct C {};", "struct D {};"]}},
+                   finish())
+    run(tmp_path, llm, backend, write=True)
+    assert backend.call.call_args.args == ("declare_type", {"decls": ["struct C {};", "struct D {};"]})
+
+
 def test_tool_failure_keeps_journal_and_suppresses_save(tmp_path: Path) -> None:
     backend = client()
     backend.call.side_effect = RuntimeError("connection lost after write")

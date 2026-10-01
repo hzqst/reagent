@@ -179,6 +179,15 @@ def _run(
                 if arguments.get("address") not in addresses:
                     raise ValueError("Local type writes require an explicitly selected function address")
                 client.validate_local(arguments)
+            if name == "declare_type":
+                # The IDA-MCP server comma-splits a *string* decls into several
+                # declarations, which shreds any declaration containing a comma
+                # (two-parameter function members, multi-member structs) and
+                # fails with a misleading "Missing brace". Wrap it as a single
+                # list element so it is parsed whole.
+                decls = arguments.get("decls")
+                if isinstance(decls, str):
+                    arguments = {**arguments, "decls": [decls]}
             if name == "set_type":
                 edits = arguments.get("edits", [])
                 for edit in edits if isinstance(edits, list) else [edits]:
