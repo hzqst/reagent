@@ -27,6 +27,10 @@ _VERDICT_ALIASES = {
     "OK": Verdict.PASS,
     "GOOD": Verdict.PASS,
     "VERIFIED": Verdict.PASS,
+    # pi/glm-5.3 对「代码正确」常用的措辞；漏掉它会把整个函数判为协议错误并丢弃候选。
+    "ACCEPT": Verdict.PASS,
+    "ACCEPTED": Verdict.PASS,
+    "APPROVED": Verdict.PASS,
     "FAIL": Verdict.FAIL,
     "INCORRECT": Verdict.FAIL,
     "WRONG": Verdict.FAIL,
