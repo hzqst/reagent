@@ -25,6 +25,60 @@ You'll need a program to analyze and a supported AI provider. Your agent can hel
 
 **Setup agents:** follow the [setup workflow](docs/agent-setup.md). Detect the host OS and installed toolchain, generate portable validation commands, and migrate incompatible existing commands before starting reversal. The user should not need an OS-specific prompt or edit command syntax manually.
 
+## Driving re-agent from an AI coding session
+
+An AI coding agent (Claude Code, Codex, Pi, …) can act as the outer
+orchestrator and let re-agent do the reversal work. re-agent exposes no server
+or MCP endpoint — its only integration surface is the `re-agent` CLI — so drive
+it as a batch subprocess, not as a service.
+
+Run the free steps first, then the one model-backed step:
+
+| Step | Command | Model calls |
+|---|---|---|
+| Preflight | `re-agent doctor --address 0x...` | none |
+| Plan | `re-agent plan --address 0x... --max-depth N --max-functions M --output group.json` | none |
+| Rehearse | `re-agent reverse --manifest group.json --dry-run` | none |
+| Execute | `re-agent reverse --manifest group.json --max-functions K` | yes |
+| Check | `re-agent status --manifest group.json --format json` | none |
+| Export | `re-agent evidence --manifest group.json --output dir` | none |
+
+`plan` builds no LLM provider, so the outer agent can inspect the bounded
+function list and its explicit evidence gaps before spending anything. Keep the
+manifest, configuration, and source tree unchanged between `plan` and `reverse`:
+the manifest pins a project fingerprint, and `reverse` rejects a stale one and
+asks you to regenerate. Run the commands from the target project directory, not
+from the re-agent checkout, because artifacts are written into the working
+directory.
+
+### Run re-agent as a background task
+
+`reverse` is the only step that calls a model and can run for a long time.
+Launch it as a background task and let the outer session sleep until it finishes,
+rather than blocking the session or polling in a tight loop:
+
+- start the command in the background and act when its completion is reported;
+- read progress on demand with `re-agent status --manifest group.json --format json`;
+- do not busy-poll — every needless wake-up spends outer-session tokens for no
+  new information.
+
+### Interrupt and take over a stuck runner
+
+If a runner is clearly stuck — repeating the same failing round, looping without
+producing new evidence, or burning its bounded call budget — the outer session
+should stop it and take over rather than let it run:
+
+- interrupt the background process; a stopped run may leave partial artifacts
+  (reports, progress entries, a temporary project copy), so inspect them before
+  retrying;
+- read the last state with `re-agent status --format json` and the run's
+  `reports/re-agent/logs/<run-id>/` before deciding the next step;
+- fix the cause (configuration, evidence, or target selection) and re-run a
+  smaller batch instead of blindly replaying the same command.
+
+re-agent never patches the target source tree and never commits or pushes, so a
+stopped run leaves the original project unchanged.
+
 ## What it does
 
 ```text
