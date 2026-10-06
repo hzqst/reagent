@@ -336,10 +336,16 @@ Set `OPENAI_API_KEY` or `RE_AGENT_LLM_API_KEY`.
 llm:
   provider: codex
   model: gpt-5.4
+  effort: high      # Codex model_reasoning_effort override (optional)
 ```
 
 Codex uses the authenticated local `codex exec` command. CLI-provider
 `max_tokens` values are planning allowances, not hard output limits.
+
+`effort` overrides Codex's reasoning level. Codex has no dedicated flag for
+this, so the value is passed as `-c model_reasoning_effort="<value>"` on both
+opening and resumed turns; leave it unset to keep Codex's own configured
+default (typically `~/.codex/config.toml`).
 
 The provider passes `-c 'project_doc_fallback_filenames=["REAGENT_RUNNER.md"]'`
 on both opening and resumed turns. This overrides user and project fallback

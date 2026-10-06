@@ -80,6 +80,7 @@ def create_provider(config: LLMConfig) -> LLMProvider:
             model=config.model or "gpt-5.4",
             codex_bin=config.cli_path or "codex",
             timeout_s=config.timeout_s,
+            effort=config.effort,
             runner_prompt_file=config.runner_prompt_file,
         )
 

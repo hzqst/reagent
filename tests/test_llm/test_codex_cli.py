@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from re_agent.config.schema import LLMConfig
 from re_agent.llm.codex_cli import CodexCLIProvider
 from re_agent.llm.protocol import Message
+from re_agent.llm.registry import create_provider
 
 
 def test_large_unicode_prompt_uses_utf8_stdin(tmp_path, monkeypatch):
@@ -133,3 +135,53 @@ def test_runner_prompt_file_is_absent_by_default(monkeypatch):
     assert calls[0][1:4] == ["-c", 'project_doc_fallback_filenames=["REAGENT_RUNNER.md"]', "exec"]
     assert "project_doc_max_bytes=0" not in calls[0]
     assert not [arg for arg in calls[0] if arg.startswith("developer_instructions=")]
+
+
+def test_effort_overrides_model_reasoning_effort(monkeypatch):
+    calls = []
+
+    def invoke(args, **kwargs):
+        calls.append(list(args))
+        _write_output(args)
+        return subprocess.CompletedProcess(args, 0, '{"type":"thread.started","thread_id":"t1"}\n')
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    provider = CodexCLIProvider(effort="xhigh")
+    conversation_id = provider.new_conversation("system")
+    provider.resume(conversation_id, "first")
+    provider.resume(conversation_id, "second")
+
+    # Effort rides on both the opening exec turn and the resume turn; an empty
+    # value must leave Codex's configured default untouched.
+    for args in calls:
+        value = args[args.index("model_reasoning_effort=\"xhigh\"") - 1]
+        assert value == "-c"
+
+
+def test_effort_is_absent_by_default(monkeypatch):
+    calls = []
+
+    def invoke(args, **kwargs):
+        calls.append(list(args))
+        _write_output(args)
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    CodexCLIProvider().send([Message(role="user", content="x")])
+
+    assert not [arg for arg in calls[0] if arg.startswith("model_reasoning_effort=")]
+
+
+def test_registry_passes_effort_to_codex(monkeypatch):
+    calls = []
+
+    def invoke(args, **kwargs):
+        calls.append(list(args))
+        _write_output(args)
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    provider = create_provider(LLMConfig(provider="codex", model="gpt-5.4", effort="high"))
+    provider.send([Message(role="user", content="x")])
+
+    assert 'model_reasoning_effort="high"' in calls[0]
