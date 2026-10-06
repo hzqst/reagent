@@ -41,12 +41,16 @@ Notes:
 
 - `claude` uses the Anthropic SDK and typically reads `ANTHROPIC_API_KEY`
 - `openai` and `openai-compat` use the OpenAI-compatible chat completions provider and typically read `OPENAI_API_KEY`
-- `codex` uses the local `codex` CLI and ChatGPT login credentials instead of an API key
+- `codex` uses the local `codex` CLI and ChatGPT login credentials instead of an API key.
+  `effort` is optional and overrides Codex's reasoning level through
+  `-c model_reasoning_effort="<value>"`; unset keeps Codex's configured default.
 - `claude-cli` uses the local Claude Code CLI login. `cli_path`,
   `max_budget_usd`, and `effort` are optional.
 - `pi` uses the local [Pi coding agent](https://pi.dev) CLI and its existing
   login/configuration. `cli_path` is optional; `effort` maps to Pi's `--thinking`
   level. An empty or unchanged `model` defers to Pi's own configured default.
+- `codex` uses the local `codex` CLI. `cli_path` and `effort` are optional;
+  `effort` overrides Codex's `model_reasoning_effort` for the role.
 
 CLI providers run from the project directory, so the harness would otherwise
 inject that project's own prompt (`AGENTS.md` / `CLAUDE.md`) into every

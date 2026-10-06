@@ -38,11 +38,13 @@ class CodexCLIProvider:
         model: str = "gpt-5.4",
         timeout_s: int = 1800,
         codex_bin: str = "codex",
+        effort: str | None = None,
         runner_prompt_file: str | None = None,
     ) -> None:
         self._model = model
         self._timeout_s = timeout_s
         self._codex_bin = codex_bin
+        self._effort = effort
         # Read once: the provider factory already refuses a missing file, and the
         # contents become an argv element on every invocation.
         self._runner_prompt = (
@@ -109,8 +111,23 @@ class CodexCLIProvider:
             "--json",
             "-m",
             str(model or self._model),
+            *self._effort_args(),
             *self._prompt_isolation_args(),
         ]
+
+    def _effort_args(self) -> list[str]:
+        """Override Codex's model reasoning effort for this invocation.
+
+        Codex reads its reasoning level from the ``model_reasoning_effort``
+        config key (there is no dedicated CLI flag), so the override travels as
+        a ``-c`` value.  The value is quoted to stay a single TOML string even
+        if a future level contains a character TOML would otherwise reject.  It
+        is applied on both opening and resumed turns: an unset ``effort`` leaves
+        Codex's configured default untouched.
+        """
+        if self._effort is None:
+            return []
+        return ["-c", f'model_reasoning_effort="{self._effort}"']
 
     def _resume_args(self, thread_id: str, model: Any) -> list[str]:
         # ``codex exec resume`` rejects ``-s`` and ``--color``; the read-only
@@ -128,6 +145,7 @@ class CodexCLIProvider:
             "--json",
             "-m",
             str(model or self._model),
+            *self._effort_args(),
             *self._prompt_isolation_args(),
         ]
 

@@ -19,7 +19,7 @@ class _RecoveryCodexProvider(CodexCLIProvider):
 
     def __init__(self, config: LLMConfig) -> None:
         super().__init__(model=config.model, timeout_s=config.timeout_s, codex_bin=config.cli_path or "codex",
-                         runner_prompt_file=str(PROMPT))
+                         effort=config.effort, runner_prompt_file=str(PROMPT))
         try:
             proc = subprocess.run([self._codex_bin, "mcp", "list", "--json"], capture_output=True,
                                   text=True, timeout=config.timeout_s, check=False)

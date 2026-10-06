@@ -29,6 +29,16 @@ def test_codex_isolation_applies_on_resume() -> None:
         assert 'features.shell_tool=false' in args
 
 
+def test_codex_recovery_effort_is_forwarded() -> None:
+    process = subprocess.CompletedProcess([], 0, '[]', '')
+    with patch("re_agent.recovery.provider.subprocess.run", return_value=process):
+        provider = _RecoveryCodexProvider(
+            RecoveryConfig(provider="codex", model="test", effort="xhigh")
+        )
+    assert 'model_reasoning_effort="xhigh"' in provider._exec_args(None)
+    assert 'model_reasoning_effort="xhigh"' in provider._resume_args("thread", None)
+
+
 def test_codex_discovery_failure_is_closed() -> None:
     with patch("re_agent.recovery.provider.subprocess.run", side_effect=FileNotFoundError), \
          pytest.raises(RuntimeError, match="isolate"):
