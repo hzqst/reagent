@@ -14,6 +14,17 @@ from re_agent.utils.address import checked_address
 from re_agent.utils.storage import atomic_json
 
 
+def _is_stub_name(name: str) -> bool:
+    """Return True for an IDA import-stub name (``._Z...``) rather than a body (``_Z...``).
+
+    IDA names a PLT thunk after its target's symbol but cannot reuse the reserved
+    name, so it prefixes the stub with a dot; ``.L`` locals never appear as call
+    targets and are excluded so the rule cannot match a real label.
+    """
+    name = name.strip()
+    return bool(name) and name.startswith(".") and not name.startswith(".L")
+
+
 @dataclass
 class TargetPlan:
     identity: str
@@ -142,12 +153,23 @@ def build_plan(backend: REBackend, seeds: list[str], identity: str, *,
             continue
         try:
             refs = backend.xrefs_from(address)
-            callees = sorted({checked_address(ref.address) for ref in refs if "CALL" in ref.ref_type.upper()})
+            # Call targets may carry several symbol names; collect them all so a
+            # stub alias cannot hide a real body reported under the same address.
+            names: dict[str, list[str]] = {}
+            for ref in refs:
+                if "CALL" in ref.ref_type.upper():
+                    names.setdefault(checked_address(ref.address), []).append(ref.name)
         except (OSError, ValueError, RuntimeError, NotImplementedError) as exc:
             reason = str(exc).strip() or type(exc).__name__
             plan.gaps.append(EvidenceGap(address, reason, "xrefs_from", "query_failed"))
             continue
-        for callee in callees:
+        for callee in sorted(names):
+            # Import stubs stay visible as edges but are never selected as
+            # reversal targets, and are noted so the omission is explicit.
+            if all(_is_stub_name(name) for name in names[callee]):
+                plan.gaps.append(EvidenceGap(address, f"Import stub {callee} not selected as a target",
+                                             "target-plan", "skipped"))
+                continue
             plan.edges.append({"source": address, "target": callee})
             if callee not in queued and depth < max_depth:
                 queued.add(callee)

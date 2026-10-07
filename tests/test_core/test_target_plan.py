@@ -16,6 +16,18 @@ class GraphBackend(StubBackend):
         return [XRef(address, "", "CALL") for address in edges.get(target, [])]
 
 
+class StubCalleeBackend(StubBackend):
+    """Callee list mixing a real body with an import stub of the same symbol."""
+
+    def xrefs_from(self, target: str) -> list[XRef]:
+        if target != "140001000":
+            return []
+        return [
+            XRef("140002000", "_Z17UTIL_FormatStringILj32EEiRAT__cPKcz", "CALL"),
+            XRef("140002100", "._Z17UTIL_FormatStringILj32EEiRAT__cPKcz", "CALL"),
+        ]
+
+
 def test_bounded_cycle_and_roundtrip(tmp_path: Path) -> None:
     plan = build_plan(GraphBackend(), ["0x140001000", "140001000"], "a" * 64, max_depth=3, max_functions=2)
     assert [target.address for target in plan.functions] == ["140001000", "140002000"]
@@ -26,6 +38,16 @@ def test_bounded_cycle_and_roundtrip(tmp_path: Path) -> None:
     previous = path.read_bytes()
     build_plan(GraphBackend(), ["140001000"], "a" * 64, max_depth=3, max_functions=2).save(path)
     assert path.read_bytes() == previous
+
+
+def test_import_stub_callee_excluded_from_targets() -> None:
+    plan = build_plan(StubCalleeBackend(), ["140001000"], "a" * 64, max_depth=2, max_functions=10)
+    addresses = [target.address for target in plan.functions]
+    # The real body is selected; its dot-prefixed import stub is not.
+    assert "140002000" in addresses
+    assert "140002100" not in addresses
+    assert {"source": "140001000", "target": "140002100"} not in plan.edges
+    assert any(gap.kind == "skipped" and "140002100" in gap.reason for gap in plan.gaps)
 
 
 def test_depth_zero_reports_external_dependencies() -> None:
