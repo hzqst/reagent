@@ -543,8 +543,9 @@ Function-context bundles and per-function Ghidra JSON exports may include `gaps`
  "reason":"Indirect register call target not resolved","origin":"analysis-export"}
 ```
 
-Kinds are `unavailable`, `unsupported`, `query_failed`, `unresolved_call`, and
-`limit`. The site is optional. Addresses are hexadecimal strings of unrestricted
+Kinds are `unavailable`, `unsupported`, `query_failed`, `unresolved_call`,
+`limit`, and `skipped` (a target deliberately not selected, such as an IDA
+import stub). The site is optional. Addresses are hexadecimal strings of unrestricted
 width. Labels describe observations; they do not establish recovered semantics.
 The graph preserves full context bundles and gap records alongside existing
 nodes/edges. Refreshing a context replaces its previous gap observations. Old

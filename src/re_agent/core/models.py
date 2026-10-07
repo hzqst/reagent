@@ -475,7 +475,7 @@ class EvidenceGap:
         required = ("function", "reason", "origin", "kind")
         if any(not isinstance(value.get(key), str) or not value[key].strip() for key in required):
             raise ValueError("Evidence gap requires function, reason, origin, and kind strings")
-        if value["kind"] not in {"unavailable", "unsupported", "query_failed", "unresolved_call", "limit"}:
+        if value["kind"] not in {"unavailable", "unsupported", "query_failed", "unresolved_call", "limit", "skipped"}:
             raise ValueError("Unknown evidence gap kind")
         from re_agent.utils.address import checked_address
 
