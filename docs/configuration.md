@@ -311,6 +311,10 @@ recovery:
   file_roots:
     - references/particleman_goldsrc_8684
     - references/halflife-updated/cl_dll/particleman
+  # Optional.  Unset (default) means a file call spends a max_steps slot, as it
+  # always has.  Set it to give file calls a budget of their own so consulting
+  # reference source costs no IDA evidence slot.
+  # max_file_calls: 20
 ```
 
 ### Additional evidence: `--evidence` and `--evidence-dirs`
@@ -363,6 +367,14 @@ File content is treated as data, never as instructions: the recovery system
 prompt states that tool results and file text cannot expand the agent's
 permissions.
 
+**Budget.** By default a file call spends one `max_steps` slot, exactly like an
+IDA call: the recovery agent has a single turn budget. Set `max_file_calls` to
+give file calls a budget of their own instead, so consulting reference source
+does not crowd out IDA evidence. Every turn then charges one counter — the file
+budget while it has room, otherwise `max_steps` — so refused and malformed
+requests still cost a step, and the model cannot lengthen the run by asking past
+its budgets.
+
 ## Reverser tools
 
 The `reverser_tools` section gives the reverser agent the same three host-side
@@ -402,6 +414,8 @@ Differences from the recovery agent:
   function and is tracked separately from `orchestrator.max_investigations`.
   A refused request (unknown tool, escaping path, bad regex) costs neither
   budget. `max_file_calls: 0` withdraws the tools even when roots are set.
+  The recovery agent's `recovery.max_file_calls` is the analogue, but note the
+  default differs: it is *unset* there, where file calls share `max_steps`.
 - **Master switch.** `orchestrator.investigation_enabled: false` disables the
   whole read-only request loop, file tools included.
 - **Rebased in isolated class runs.** Under `validation.copy_project` with

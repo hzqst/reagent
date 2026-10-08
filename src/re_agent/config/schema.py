@@ -108,6 +108,11 @@ class RecoveryConfig(LLMConfig):
     # tools. Empty (the default) leaves the recovery agent with no filesystem
     # access at all: it then sees only --evidence and the IDB, exactly as before.
     file_roots: list[str] = field(default_factory=list)
+    # Budget for file-tool calls. ``None`` (the default) keeps the historical
+    # behaviour: a file call spends a ``max_steps`` slot like any IDA call.  Set
+    # an integer to give file calls their own budget so source lookup does not
+    # crowd out IDA evidence -- this mirrors ``reverser_tools.max_file_calls``.
+    max_file_calls: int | None = None
 
 
 @dataclass

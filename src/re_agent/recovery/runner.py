@@ -145,19 +145,40 @@ def _run(
         initial["evidence_files"] = [str(path) for path in evidence_files]
     if file_roots:
         initial["file_roots"] = files.tree(file_roots)
+    # A served file call does not spend a step, so consulting reference source
+    # costs no IDA evidence slot.  ``None`` keeps the historical shared budget,
+    # where a file call spends a step like any other turn.
+    file_budget = settings.max_file_calls
+    file_used = 0
+    steps_used = 0
+    # Every turn charges a step up front -- refusals and malformed responses
+    # included, exactly as the previous ``range(max_steps)`` loop did -- and a
+    # served file call refunds it against the file budget instead.  One counter
+    # therefore always advances, so a model that keeps asking past its budgets
+    # cannot lengthen the run.
+    max_rounds = settings.max_steps + (file_budget or 0)
     # Native conversation state avoids replaying the growing catalog/transcript
     # on CLI providers. API providers use the same Message contract as reverse.
     conversation = provider.new_conversation(system) if provider.supports_conversations else None
     history = [Message(role="system", content=system)]
     message = json.dumps(initial, ensure_ascii=False)
     atomic_json(report_path, report)
-    for step in range(settings.max_steps):
+    rounds = 0
+    # The run is extended past ``max_steps`` only by a turn that was actually
+    # served from the file budget.  Otherwise an unused file budget would keep
+    # the loop alive while a model spent the extra turns on refusals.
+    served_file_call = False
+    while rounds < max_rounds and (steps_used < settings.max_steps or served_file_call):
+        served_file_call = False
+        rounds += 1
+        steps_used += 1
         atomic_json(report_path, report)
-        _log.info("Recovery step %d/%d (%s)", step + 1, settings.max_steps, report["mode"])
+        _log.info("Recovery step %d/%d (%s)", steps_used, settings.max_steps, report["mode"])
         history.append(Message(role="user", content=message))
         response = provider.resume(conversation, message) if conversation is not None else provider.send(history)
         history.append(Message(role="assistant", content=response))
-        event: dict[str, Any] = {"step": step + 1, "response": response, "status": "pending"}
+        # The turn index, independent of which budget the turn ends up on.
+        event: dict[str, Any] = {"step": rounds, "response": response, "status": "pending"}
         report["events"].append(event)
         atomic_json(report_path, report)
         try:
@@ -211,6 +232,10 @@ def _run(
             event.update(status="invalid", error=str(exc))
             message = json.dumps({"error": str(exc), "instruction": "Return a valid tool request or finish object"})
             continue
+        if name in files.FILE_TOOL_NAMES and file_budget is not None and file_used < file_budget:
+            # Served from the file budget: this turn refunds the step charged
+            # above and extends the run by one turn.
+            served_file_call = True
         event.update(tool=name, arguments=arguments)
         mutating = name in WRITE_TOOLS
         if mutating:
@@ -228,6 +253,9 @@ def _run(
             if error:
                 raise RuntimeError(error)
             event["status"] = "ok"
+            if served_file_call:
+                file_used += 1
+                steps_used -= 1
             message = _bounded({"tool": name, "result": result}, settings.max_result_chars)
         except (RuntimeError, OSError, ValueError) as exc:
             event.update(status="failed", error=str(exc))

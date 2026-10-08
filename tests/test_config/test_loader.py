@@ -93,6 +93,28 @@ def test_reverser_tools_rejects_a_blank_root(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_recovery_max_file_calls_defaults_to_shared_budget(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("recovery:\n  max_steps: 10\n", encoding="utf-8")
+    assert load_config(path).recovery is not None
+    assert load_config(path).recovery.max_file_calls is None  # type: ignore[union-attr]
+
+
+def test_recovery_max_file_calls_can_be_set(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("recovery:\n  max_steps: 10\n  max_file_calls: 6\n", encoding="utf-8")
+    config = load_config(path)
+    assert config.recovery is not None
+    assert config.recovery.max_file_calls == 6
+
+
+def test_recovery_max_file_calls_rejects_a_bad_value(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("recovery:\n  max_file_calls: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="recovery.max_file_calls must be a positive integer"):
+        load_config(path)
+
+
 def test_cli_overrides() -> None:
     config = load_config(None, cli_overrides={"llm.provider": "openai", "orchestrator.max_review_rounds": "6"})
     assert config.llm.provider == "openai"

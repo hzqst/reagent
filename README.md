@@ -765,6 +765,12 @@ endpoint, recording every request and result. Native Codex MCP connections and
 shell tools are disabled on opening and resumed turns. `runner_prompt_file`, if
 set, is supplied as additional context; it does not replace the recovery policy.
 
+`file_roots` grants the agent read-only `read`/`grep`/`glob` access to reference
+trees, and `max_file_calls` optionally gives those file calls a budget of their
+own. It is unset by default, where a file call spends one `max_steps` slot like
+any IDA call; set it so consulting reference source costs no IDA evidence slot.
+See [docs/configuration.md](docs/configuration.md#filesystem-tools-recoveryfile_roots).
+
 The IDA server must expose `py_eval` for fixed type readback helpers and
 `idb_save` for backups/saving. A dedicated recovery local-type tool writes saved
 Hex-Rays settings using the variable's location, definition address and expected

@@ -211,6 +211,74 @@ def test_evidence_files_enable_tools_and_become_readable_roots(tmp_path: Path) -
     backend.call.assert_not_called()
 
 
+def _budget_run(tmp_path: Path, llm: Mock, backend: Mock, roots: list[str], **fields: object) -> dict:
+    settings = RecoveryConfig(max_steps=4, file_roots=roots, **fields)  # type: ignore[arg-type]
+    return run_recovery(llm, backend, ["0x401000"], settings, tmp_path / "run.json")
+
+
+def test_file_calls_share_the_step_budget_by_default(tmp_path: Path) -> None:
+    """Default (max_file_calls unset) must keep the historical shared budget."""
+    root = tmp_path / "refs"
+    root.mkdir()
+    (root / "a.h").write_text("struct A {};\n", encoding="utf-8")
+    # Two file calls and nothing else: each spends one of the four steps.
+    llm = provider(
+        {"action": "tool", "name": "read", "arguments": {"path": "a.h"}},
+        {"action": "tool", "name": "read", "arguments": {"path": "a.h"}},
+        finish(),
+    )
+    result = _budget_run(tmp_path, llm, client(), [str(root)])
+    assert [event["step"] for event in result["events"]] == [1, 2, 3]
+    assert [event["status"] for event in result["events"]] == ["ok", "ok", "finished"]
+
+
+def test_file_calls_can_get_their_own_budget(tmp_path: Path) -> None:
+    """An explicit budget keeps served file calls from spending step slots.
+
+    ``max_steps=2`` would only allow two turns on the shared budget; the file
+    budget extends the run to ``max_steps + max_file_calls``.
+    """
+    root = tmp_path / "refs"
+    root.mkdir()
+    (root / "a.h").write_text("struct A {};\n", encoding="utf-8")
+    call = {"action": "tool", "name": "read", "arguments": {"path": "a.h"}}
+    llm = provider(call, call, call, call, finish())
+    settings = RecoveryConfig(max_steps=2, file_roots=[str(root)], max_file_calls=3)
+    result = run_recovery(llm, client(), ["0x401000"], settings, tmp_path / "run.json")
+    assert result["status"] == "planned"  # preview (no write) mode
+    assert [event["step"] for event in result["events"]] == [1, 2, 3, 4, 5]
+    assert [event["status"] for event in result["events"]] == ["ok", "ok", "ok", "ok", "finished"]
+
+
+def test_exhausted_file_budget_falls_back_to_steps(tmp_path: Path) -> None:
+    """Past the file budget, further file calls spend steps until those run out."""
+    root = tmp_path / "refs"
+    root.mkdir()
+    (root / "a.h").write_text("struct A {};\n", encoding="utf-8")
+    call = {"action": "tool", "name": "read", "arguments": {"path": "a.h"}}
+    llm = provider(call, call, call, call, call, call)
+    settings = RecoveryConfig(max_steps=2, file_roots=[str(root)], max_file_calls=1)
+    result = run_recovery(llm, client(), ["0x401000"], settings, tmp_path / "run.json")
+    assert result["status"] == "budget-exhausted"
+    # 1 file call on its own budget, then 2 more on the step budget.
+    assert [event["step"] for event in result["events"]] == [1, 2, 3]
+    assert all(event["status"] == "ok" for event in result["events"])
+
+
+def test_refused_turns_still_charge_a_step_with_a_file_budget(tmp_path: Path) -> None:
+    """Refusals must stay bounded: only a *served* file call refunds its step."""
+    root = tmp_path / "refs"
+    root.mkdir()
+    backend = client()
+    # ``idb_save`` is not in READ_TOOLS, so each request is denied and charged.
+    llm = provider(*[{"action": "tool", "name": "idb_save", "arguments": {}}] * 5)
+    settings = RecoveryConfig(max_steps=3, file_roots=[str(root)], max_file_calls=50)
+    result = run_recovery(llm, backend, ["0x401000"], settings, tmp_path / "run.json")
+    assert result["status"] == "budget-exhausted"
+    assert len(result["events"]) == 3
+    assert all(event["status"] == "denied" for event in result["events"])
+
+
 def test_response_parser_accepts_single_action_but_not_multiple() -> None:
     action = {"action": "tool", "name": "decompile", "arguments": {"addr": "0x401000"}}
     assert _parse_response("Inspect the target.\n" + json.dumps(action)) == action

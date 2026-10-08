@@ -62,6 +62,9 @@ llm:
 #   model: "sonnet"
 #   max_steps: 40
 #   timeout_s: 1800
+#   # Optional: unset shares max_steps with IDA calls; set it to give the
+#   # read/grep/glob file calls a budget of their own.
+#   # max_file_calls: 20
 
 # Opt-in read-only file lookup for the reverser (read/grep/glob). Empty
 # file_roots (the default) grants it no filesystem access. Relative roots

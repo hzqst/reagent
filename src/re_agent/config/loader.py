@@ -260,6 +260,11 @@ def validate_config(config: ReAgentConfig) -> None:
             value = getattr(config.recovery, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"recovery.{name} must be a positive integer")
+        # None is the documented default: file calls share the max_steps budget.
+        if config.recovery.max_file_calls is not None and (
+            type(config.recovery.max_file_calls) is not int or config.recovery.max_file_calls < 1
+        ):
+            raise ValueError("recovery.max_file_calls must be a positive integer when set")
     for name in (
         "max_review_rounds",
         "max_functions_per_class",

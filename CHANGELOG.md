@@ -8,6 +8,10 @@
 - Add `reverser_tools.max_file_calls`, a file-call budget tracked separately from `orchestrator.max_investigations` so source lookup never crowds out binary evidence. Refused requests (escaping paths, unknown tools, bad regex) cost neither budget.
 - Rebase readable roots onto the isolated scratch copy during cumulative class runs, so the reverser reads the copy rather than the original tree.
 
+### Recovery budget
+
+- Add `recovery.max_file_calls` (unset by default) so the recovery agent's `read`/`grep`/`glob` calls can be given their own budget instead of spending `max_steps` slots. Unset preserves the existing shared-budget behaviour exactly; every turn still charges one counter, so refusals and malformed requests cost a step as before.
+
 ## 0.4.0 — 2026-09-09
 
 ### Portable validation
