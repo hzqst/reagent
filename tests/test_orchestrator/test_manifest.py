@@ -138,7 +138,9 @@ def test_manifest_rebases_reverser_file_roots_into_the_scratch_copy(tmp_path: Pa
 
     assert len(seen) == 1
     rebased, existed = seen[0]
-    assert rebased == rebased.resolve()
-    assert rebased != (tmp_path / "src").resolve()
-    assert rebased.name == "src" and existed
-    assert rebased.parent != tmp_path
+    # Compare resolved forms: on macOS the temp dir lives under a symlink
+    # (/var -> /private/var), so an unresolved path is not its own resolve().
+    resolved = rebased.resolve()
+    assert resolved != (tmp_path / "src").resolve()
+    assert resolved.name == "src" and existed
+    assert resolved.parent != tmp_path.resolve()
