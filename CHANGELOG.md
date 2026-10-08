@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Reverser source lookup
+
+- Add `reverser_tools.file_roots`: opt-in, root-confined host-side `read`/`grep`/`glob` tools for the reverser agent, reusing the recovery agent's file-tool implementation. Off by default — with no roots the tools are neither advertised nor servable and the prompt is unchanged.
+- Add `reverser_tools.max_file_calls`, a file-call budget tracked separately from `orchestrator.max_investigations` so source lookup never crowds out binary evidence. Refused requests (escaping paths, unknown tools, bad regex) cost neither budget.
+- Rebase readable roots onto the isolated scratch copy during cumulative class runs, so the reverser reads the copy rather than the original tree.
+
 ## 0.4.0 — 2026-09-09
 
 ### Portable validation

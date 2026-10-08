@@ -45,6 +45,8 @@ def run_fix_loop(
     objective_control_flow_tolerance: int = 2,
     investigation_enabled: bool = True,
     max_investigations: int = 8,
+    file_roots: list[Path] | None = None,
+    max_file_calls: int = 0,
     candidate_gate: Callable[[ReversalResult], ReversalResult] | None = None,
     max_llm_calls: int = 80,
 ) -> ReversalResult:
@@ -83,6 +85,8 @@ def run_fix_loop(
         report_dir=report_dir,
         investigation_enabled=investigation_enabled,
         max_investigations=max_investigations,
+        file_roots=file_roots,
+        max_file_calls=max_file_calls,
     )
     checker = CheckerAgent(checker_llm, backend)
 

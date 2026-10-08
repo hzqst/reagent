@@ -63,6 +63,14 @@ llm:
 #   max_steps: 40
 #   timeout_s: 1800
 
+# Opt-in read-only file lookup for the reverser (read/grep/glob). Empty
+# file_roots (the default) grants it no filesystem access. Relative roots
+# resolve against validation.project_root.
+# reverser_tools:
+#   file_roots:
+#     - "source/game_sa"
+#   max_file_calls: 20
+
 backend:
   type: "ghidra-bridge"
   cli_path: "ghidra-bridge"

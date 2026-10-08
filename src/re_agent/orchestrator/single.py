@@ -17,6 +17,7 @@ from re_agent.llm.protocol import LLMProvider
 from re_agent.parity.engine import fetch_ghidra_data, score_single
 from re_agent.parity.rules import read_semantic_rules
 from re_agent.parity.source_indexer import SourceIndexer
+from re_agent.recovery import files
 from re_agent.verification.candidate import (
     _sanitize_path_component,
     cleanup_candidate_overlay,
@@ -48,6 +49,10 @@ def reverse_single(
             it here to avoid re-scanning the entire source tree each time.
     """
     log_dir = Path(config.output.log_dir) if config.output.log_dir else None
+    # An unusable file_roots entry is a hard error, raised outside the try below
+    # so it surfaces as a configuration mistake instead of a per-function
+    # reversal failure.
+    file_roots = files.resolve_roots(config.reverser_tools.file_roots, base=Path(config.validation.project_root))
 
     def gate(result: ReversalResult) -> ReversalResult:
         return validate_result(result, config, backend, indexer)
@@ -70,6 +75,8 @@ def reverse_single(
             objective_control_flow_tolerance=config.orchestrator.objective_control_flow_tolerance,
             investigation_enabled=config.orchestrator.investigation_enabled,
             max_investigations=config.orchestrator.max_investigations,
+            file_roots=file_roots,
+            max_file_calls=config.reverser_tools.max_file_calls,
             candidate_gate=gate,
             max_llm_calls=config.orchestrator.max_llm_calls_per_function,
         )

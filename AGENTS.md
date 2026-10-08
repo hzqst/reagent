@@ -115,6 +115,13 @@ pytest tests/ -m "not llm and not ghidra" -x --tb=short
 
 ## Gotchas
 
+- **The reverser's file tools are opt-in and separately budgeted.** With an empty
+  `reverser_tools.file_roots` (the default) the reverser has no filesystem
+  access: `read`/`grep`/`glob` are neither advertised in the system prompt nor
+  servable. When enabled they consume `reverser_tools.max_file_calls`, a counter
+  independent of `orchestrator.max_investigations`; refused requests cost
+  neither. Roots resolve against `validation.project_root` and are rebased onto
+  the scratch copy in cumulative class runs (`orchestrator/class_runner.py`).
 - **CLI providers intentionally suppress project prompt files.** When running a
   `claude-cli` / `codex` / `pi` role from a project directory, the harness would
   otherwise inject that project's `AGENTS.md` / `CLAUDE.md` into every reverser

@@ -253,6 +253,11 @@ orchestrator:
   selection_strategy: dependency-order
   max_attempts_per_function: 3
 
+# Optional: read-only source lookup for the reverser (off unless file_roots set).
+reverser_tools:
+  file_roots: []
+  max_file_calls: 20
+
 validation:
   enabled: true
   copy_project: true
@@ -419,6 +424,22 @@ and can request additional read-only operations:
 Evidence bundle data is also ingested into
 `reports/re-agent/knowledge-graph.json`, connecting functions, calls, globals,
 and strings. Unsupported bridge capabilities degrade gracefully.
+
+Separately, and only when you opt in, the reverser can also read the source tree
+itself with host-side `read`/`grep`/`glob` tools:
+
+```yaml
+reverser_tools:
+  file_roots: ["source/game_sa"]
+  max_file_calls: 20
+```
+
+Roots are read-only and confined; relative paths resolve against
+`validation.project_root`. This is off by default — with no `file_roots` the
+tools are neither advertised nor servable, and the prompt is unchanged. The file
+budget is independent of `max_investigations`, so source lookup never crowds out
+binary evidence. See
+[docs/configuration.md](docs/configuration.md#reverser-tools).
 
 ## Candidate validation
 

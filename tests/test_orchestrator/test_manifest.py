@@ -100,3 +100,45 @@ def test_manifest_cumulative_resume_across_classes(tmp_path: Path) -> None:
                               MockLLM(['{"verdict":"PASS"}']))
     assert first[0].success and second[0].success
     assert file.read_text(encoding="utf-8") == original
+
+
+def test_manifest_rebases_reverser_file_roots_into_the_scratch_copy(tmp_path: Path) -> None:
+    """The isolated copy must not leave the reverser reading the original tree."""
+    import shutil
+
+    from re_agent.config.schema import ValidationConfig
+
+    compiler = shutil.which("c++")
+    if not compiler:
+        pytest.skip("C++ compiler required")
+    config = config_for(tmp_path)
+    (Path(config.project_profile.source_root) / "group.cpp").write_text(
+        "struct A { static int f(); };\nint A::f() { return 7; }\nint main() { return A::f()==7 ? 0 : 1; }\n",
+        encoding="utf-8",
+    )
+    config.validation = ValidationConfig(
+        copy_project=True, project_root=str(tmp_path), trust_configured_commands=True,
+        build_commands=[[compiler, "src/group.cpp", "-o", "program.exe"]],
+        test_commands=[["{overlay_root}/program.exe"]],
+    )
+    config.reverser_tools.file_roots = ["src"]
+    config.reverser_tools.max_file_calls = 3
+    plan = TargetPlan("a" * 64, ["00000100"], [FunctionTarget("00000100", "A", "f")])
+
+    seen: list[tuple[Path, bool]] = []
+
+    def capture(target, isolated, *args, **kwargs):
+        # The scratch tree only exists for the duration of the call.
+        rebased = Path(isolated.reverser_tools.file_roots[0])
+        seen.append((rebased, rebased.is_dir()))
+        return ReversalResult(target, "int A::f() { return 7; }", success=True)
+
+    with patch("re_agent.orchestrator.class_runner.reverse_single", side_effect=capture):
+        reverse_manifest(plan, config, StubBackend(), MockLLM([""]), Session(config.output.session_file), 1)
+
+    assert len(seen) == 1
+    rebased, existed = seen[0]
+    assert rebased == rebased.resolve()
+    assert rebased != (tmp_path / "src").resolve()
+    assert rebased.name == "src" and existed
+    assert rebased.parent != tmp_path

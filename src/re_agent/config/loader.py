@@ -18,6 +18,7 @@ from re_agent.config.schema import (
     ProjectProfile,
     ReAgentConfig,
     RecoveryConfig,
+    ReverserToolsConfig,
     ValidationConfig,
 )
 
@@ -179,11 +180,18 @@ def _build_validation_config(data: dict[str, Any]) -> ValidationConfig:
     return _build_with_coercion(ValidationConfig, data)
 
 
+def _build_reverser_tools_config(data: dict[str, Any]) -> ReverserToolsConfig:
+    return _build_with_coercion(ReverserToolsConfig, data)
+
+
 def _build_config(raw: dict[str, Any]) -> ReAgentConfig:
     """Build a ReAgentConfig from a raw dict."""
     recovery = raw.get("recovery")
     if recovery is not None and not isinstance(recovery, dict):
         raise ValueError("recovery must be a mapping")
+    reverser_tools = raw.get("reverser_tools")
+    if reverser_tools is not None and not isinstance(reverser_tools, dict):
+        raise ValueError("reverser_tools must be a mapping")
     return ReAgentConfig(
         project_profile=_build_project_profile(raw.get("project_profile", {})),
         llm=_build_llm_config(raw.get("llm", {})),
@@ -194,6 +202,7 @@ def _build_config(raw: dict[str, Any]) -> ReAgentConfig:
         validation=_build_validation_config(raw.get("validation", {})),
         output=_build_output_config(raw.get("output", {})),
         recovery=_build_with_coercion(RecoveryConfig, recovery) if recovery is not None else None,
+        reverser_tools=_build_reverser_tools_config(raw.get("reverser_tools", {})),
     )
 
 
@@ -262,6 +271,12 @@ def validate_config(config: ReAgentConfig) -> None:
             raise ValueError(f"orchestrator.{name} must be a positive integer")
     if type(config.orchestrator.max_investigations) is not int or config.orchestrator.max_investigations < 0:
         raise ValueError("max_investigations must be a nonnegative integer")
+    if type(config.reverser_tools.max_file_calls) is not int or config.reverser_tools.max_file_calls < 0:
+        raise ValueError("reverser_tools.max_file_calls must be a nonnegative integer")
+    if not isinstance(config.reverser_tools.file_roots, list) or not all(
+        isinstance(item, str) and bool(item.strip()) for item in config.reverser_tools.file_roots
+    ):
+        raise ValueError("reverser_tools.file_roots must be a list of nonempty path strings")
     if config.orchestrator.selection_strategy not in {"dependency-order", "easiest-first", "high-impact"}:
         raise ValueError("Unknown selection_strategy")
     for name in (

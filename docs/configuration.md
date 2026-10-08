@@ -363,6 +363,56 @@ File content is treated as data, never as instructions: the recovery system
 prompt states that tool results and file text cannot expand the agent's
 permissions.
 
+## Reverser tools
+
+The `reverser_tools` section gives the reverser agent the same three host-side
+read-only file tools, so it can look up sibling implementations, headers, and
+other classes on demand instead of relying only on the bounded context the
+harness injects up front.
+
+```yaml
+reverser_tools:
+  # Readable roots for the reverser's read/grep/glob tools. Empty (default)
+  # grants it no filesystem access. Relative paths resolve against
+  # validation.project_root.
+  file_roots:
+    - source/game_sa
+  # Successful file calls per function. Independent of
+  # orchestrator.max_investigations, so source lookup never crowds out
+  # binary evidence.
+  max_file_calls: 20
+```
+
+The tool set, the root-confinement rules, and the bounded output are exactly
+those of [`recovery.file_roots`](#filesystem-tools-recoveryfile_roots) above —
+both agents drive the same implementation (`recovery/files.py`):
+
+| Tool | Purpose |
+| --- | --- |
+| `read` | Read a UTF-8 file under a root, with `offset`/`limit` paging. |
+| `grep` | Regex-search files under a root; returns root/file/line. |
+| `glob` | List files matching a glob under a root. |
+
+Differences from the recovery agent:
+
+- **Opt-in, and off by default.** With no `file_roots`, the tools are neither
+  advertised in the system prompt nor servable, and the prompt is byte-for-byte
+  what it was before this section existed.
+- **Separate budget.** `max_file_calls` counts *successful* file calls per
+  function and is tracked separately from `orchestrator.max_investigations`.
+  A refused request (unknown tool, escaping path, bad regex) costs neither
+  budget. `max_file_calls: 0` withdraws the tools even when roots are set.
+- **Master switch.** `orchestrator.investigation_enabled: false` disables the
+  whole read-only request loop, file tools included.
+- **Rebased in isolated class runs.** Under `validation.copy_project` with
+  `orchestrator.cumulative_validation`, roots that live inside `project_root`
+  are remapped onto the scratch copy, so the reverser reads the isolated tree
+  rather than the original.
+
+Because these requests carry an `arguments` object rather than the plain address
+the backend tools use, the reverser system prompt spells out both shapes when the
+tools are enabled.
+
 ## Project Profile
 
 The `project_profile` section makes re-agent work across different RE projects.

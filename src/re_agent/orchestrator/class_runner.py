@@ -23,6 +23,22 @@ from re_agent.verification.candidate import _remap_links, create_candidate_overl
 logger = logging.getLogger(__name__)
 
 
+def _remap_root(raw: str, original: Path, scratch: Path) -> str:
+    """Rebase a readable root onto the scratch copy when it lived in the original.
+
+    A path outside ``original`` has no scratch counterpart and is left alone;
+    ``resolve_roots`` still rejects it at run time if it is unusable.
+    """
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = original / path
+    try:
+        relative = path.resolve().relative_to(original)
+    except ValueError:
+        return raw
+    return str(scratch / relative)
+
+
 def _reverse_class(
     class_name: str,
     config: ReAgentConfig,
@@ -141,6 +157,11 @@ def reverse_class(
         isolated = copy.deepcopy(config)
         isolated.validation.project_root = str(scratch)
         isolated.project_profile.source_root = str(scratch / relative_source)
+        # Readable roots are resolved against project_root, so the scratch copy
+        # would otherwise leave the reverser reading the original tree.
+        isolated.reverser_tools.file_roots = [
+            _remap_root(raw, original, scratch) for raw in config.reverser_tools.file_roots
+        ]
         if config.project_profile.compilation_database:
             database = json.loads(Path(config.project_profile.compilation_database).read_text(encoding="utf-8"))
             remapped = json.dumps(database).replace(str(original), str(scratch))

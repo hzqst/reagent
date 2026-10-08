@@ -111,6 +111,26 @@ class RecoveryConfig(LLMConfig):
 
 
 @dataclass
+class ReverserToolsConfig:
+    """Opt-in read-only filesystem tools for the reverser agent.
+
+    Kept separate from ``agents.reverser`` on purpose: that role block is a
+    complete LLM configuration, so adding tool knobs there would force anyone
+    enabling source lookup to restate ``provider`` / ``model``.
+    """
+
+    # Directories the reverser may read through the host-side read/grep/glob
+    # tools. Empty (the default) leaves the reverser with no filesystem access
+    # at all, and the tools are neither offered in the prompt nor servable.
+    # Relative entries resolve against ``validation.project_root``.
+    file_roots: list[str] = field(default_factory=list)
+    # Budget for successful file-tool calls, independent of
+    # ``orchestrator.max_investigations`` so source lookup never crowds out
+    # binary evidence.
+    max_file_calls: int = 20
+
+
+@dataclass
 class BackendConfig:
     """Decompiler backend configuration."""
 
@@ -203,6 +223,7 @@ class ReAgentConfig:
     agents: AgentModelsConfig = field(default_factory=AgentModelsConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     recovery: RecoveryConfig | None = None
+    reverser_tools: ReverserToolsConfig = field(default_factory=ReverserToolsConfig)
 
     @classmethod
     def create_default(cls) -> ReAgentConfig:
@@ -216,4 +237,5 @@ class ReAgentConfig:
             orchestrator=OrchestratorConfig(),
             validation=ValidationConfig(),
             output=OutputConfig(),
+            reverser_tools=ReverserToolsConfig(),
         )

@@ -13,6 +13,8 @@ only this JSON shape:
 Available tools are ${available_tools}. Request only
 evidence needed to resolve a concrete uncertainty.
 
+${file_tools_note}
+
 Output format:
 - Provide the reversed C++ code in a single ```cpp code block
 - End with: REVERSED_FUNCTION: ClassName::FunctionName (0xADDRESS)

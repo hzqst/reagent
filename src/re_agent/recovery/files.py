@@ -74,6 +74,28 @@ class FileToolError(ValueError):
     """A file tool request that must be reported to the model, not crash the run."""
 
 
+def resolve_roots(entries: list[str], base: Path | None = None) -> list[Path]:
+    """Resolve configured roots, requiring each to be an existing directory.
+
+    Relative entries resolve against *base* (for the reverser, the project
+    root) so a config file is not silently interpreted against whatever
+    directory the process happened to start in. A missing or non-directory
+    entry is a hard error: dropping it quietly would leave the agent believing
+    it has access it does not.
+    """
+    roots: list[Path] = []
+    for raw in entries:
+        path = Path(raw).expanduser()
+        if base is not None and not path.is_absolute():
+            path = base / path
+        path = path.resolve()
+        if not path.is_dir():
+            raise ValueError(f"file_roots entry is not a directory: {raw!r}")
+        if path not in roots:
+            roots.append(path)
+    return roots
+
+
 def _within(root: Path, candidate: Path) -> bool:
     try:
         candidate.relative_to(root)
