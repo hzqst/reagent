@@ -125,11 +125,17 @@ class ClaudeCLIProvider:
             cmd.extend(["--max-budget-usd", str(self._max_budget_usd)])
         if self._effort is not None:
             cmd.extend(["--effort", self._effort])
-        cmd.append(prompt)
 
+        # The prompt is fed on stdin, not as an argv element.  Windows caps the
+        # whole command line near 32 KB and CreateProcess raises
+        # FileNotFoundError [WinError 206] past it, which this provider would
+        # otherwise misreport as "Claude CLI not found".  `claude -p` reads the
+        # prompt from stdin when no positional argument is given, so large
+        # evidence prompts (e.g. 40 KB decompilations) still work.
         try:
             proc = subprocess.run(
                 cmd,
+                input=prompt,
                 capture_output=True,
                 text=True,
                 timeout=self._timeout_s,
