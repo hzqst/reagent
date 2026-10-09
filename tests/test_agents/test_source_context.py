@@ -36,6 +36,7 @@ class StubBackendForPrompt:
         class _Caps:
             has_xrefs = False
             has_structs = False
+            has_asm = False
         return _Caps()
 
     def decompile(self, target: str) -> object:

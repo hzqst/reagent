@@ -158,10 +158,10 @@ class ReverserAgent:
                 structs_text = "Unavailable"
 
         asm_text = ""
-        if getattr(caps, "has_asm", False):
+        if caps.has_asm:
             try:
                 asm = self.backend.get_asm(target.address)
-                if asm is not None and getattr(asm, "instructions", ""):
+                if asm is not None and asm.instructions:
                     asm_text = asm.instructions
             except Exception:
                 asm_text = ""

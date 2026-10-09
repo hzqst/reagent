@@ -197,10 +197,10 @@ class CheckerAgent:
         # immediates, and the call sequence against machine ground truth instead of
         # rejecting an otherwise-correct candidate for lack of raw evidence.
         try:
-            asm = self.backend.get_asm(target.address) if getattr(self.backend.capabilities, "has_asm", False) else None
+            asm = self.backend.get_asm(target.address) if self.backend.capabilities.has_asm else None
         except (RuntimeError, OSError, ValueError, NotImplementedError):
             asm = None
-        if asm is not None and getattr(asm, "instructions", ""):
+        if asm is not None and asm.instructions:
             task_prompt += (
                 "\n\nOriginal disassembly (machine ground truth for offsets, immediates, "
                 "and call sequence):\n" + asm.instructions
