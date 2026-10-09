@@ -193,6 +193,18 @@ class CheckerAgent:
             struct = None
         if struct:
             task_prompt += "\n\nType layout: " + repr(struct)
+        # Preload the function's own disassembly so the checker can verify offsets,
+        # immediates, and the call sequence against machine ground truth instead of
+        # rejecting an otherwise-correct candidate for lack of raw evidence.
+        try:
+            asm = self.backend.get_asm(target.address) if getattr(self.backend.capabilities, "has_asm", False) else None
+        except (RuntimeError, OSError, ValueError, NotImplementedError):
+            asm = None
+        if asm is not None and getattr(asm, "instructions", ""):
+            task_prompt += (
+                "\n\nOriginal disassembly (machine ground truth for offsets, immediates, "
+                "and call sequence):\n" + asm.instructions
+            )
         self.last_prompt = task_prompt
 
         if self._conversation_id is None and self.llm.supports_conversations:

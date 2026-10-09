@@ -47,6 +47,7 @@ def _fenced_blocks(response: str) -> list[tuple[str, str]]:
 # Order is the order the prompt lists them in.
 _TOOL_METHODS: dict[str, str] = {
     "decompile": "decompile",
+    "asm": "get_asm",
     "xrefs_from": "xrefs_from",
     "xrefs_to": "xrefs_to",
     "struct": "get_struct",
@@ -64,6 +65,7 @@ _TOOL_METHODS: dict[str, str] = {
 # ``NotImplementedError`` for an operation are never asked for it.
 _TOOL_CAPABILITIES: dict[str, str] = {
     "decompile": "has_decompile",
+    "asm": "has_asm",
     "xrefs_from": "has_xrefs",
     "xrefs_to": "has_xrefs",
     "struct": "has_structs",
@@ -155,6 +157,15 @@ class ReverserAgent:
             except Exception:
                 structs_text = "Unavailable"
 
+        asm_text = ""
+        if getattr(caps, "has_asm", False):
+            try:
+                asm = self.backend.get_asm(target.address)
+                if asm is not None and getattr(asm, "instructions", ""):
+                    asm_text = asm.instructions
+            except Exception:
+                asm_text = ""
+
         system_prompt = self._system_prompt()
         source_context = ""
         if self._source_context_builder is not None:
@@ -169,6 +180,7 @@ class ReverserAgent:
             decompiled=decompiled,
             xrefs=xrefs_text or "None",
             structs=structs_text or "None",
+            disassembly=asm_text or "Unavailable",
             source_context=source_context or "None",
             investigation_context=investigation_context or "None",
             language_standard=(self._project_profile.language_standard if self._project_profile else "C++"),
@@ -453,6 +465,8 @@ class ReverserAgent:
             rendered = str(value.content)
         elif hasattr(value, "raw_output"):
             rendered = str(value.raw_output)
+        elif hasattr(value, "instructions"):  # AsmResult: the listing, not the dataclass repr
+            rendered = str(value.instructions)
         else:
             rendered = repr(value)
         return f"TOOL {tool}({argument}):\n{bounded_evidence(rendered, 12000)}", True

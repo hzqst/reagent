@@ -13,6 +13,11 @@ ${xrefs}
 **Struct/type context:**
 ${structs}
 
+**Original disassembly (machine ground truth for offsets, immediates, and call sequence):**
+```
+${disassembly}
+```
+
 **Existing source context:**
 ${source_context}
 
