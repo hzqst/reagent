@@ -15,25 +15,32 @@ from re_agent.core.models import FunctionTarget, SourceMatch, ValidationVerdict,
 from re_agent.utils.address import address_key
 from re_agent.utils.process import run_process
 
-# A top-level brace block whose head looks like a ``namespace`` or ``extern "C"``
-# wrapper.  The model is not allowed to wrap the function, so these must be
-# reported as a distinct error instead of being mistaken for a type definition.
-_WRAPPER_HEAD_RE = re.compile(r"\bnamespace\b|^\s*extern\s*$")
+# A top-level brace block whose head looks like an ``extern "C"`` wrapper.  The
+# model is not allowed to wrap the function, so these must be reported as a
+# distinct error instead of being mistaken for a type definition.
+_WRAPPER_HEAD_RE = re.compile(r"^\s*extern\s*$")
+# A top-level ``namespace`` block is tolerated as a *type* declaration container
+# (models legitimately write ``namespace vgui2 { class ILocalize {...}; }``
+# above the function).  It is only a wrapper error when it also carries the
+# function body, which is detected via the definition count below.
+_NAMESPACE_HEAD_RE = re.compile(r"\bnamespace\b")
 
 
 def extract_candidate_body(code: str) -> str:
     """Extract the single top-level function body from generated code.
 
-    Leading declarations (``struct`` / ``class`` / ``union`` / ``enum``,
-    initializer lists, lambdas) are legal and skipped; the body of the sole
-    top-level function definition is returned.  Trailing code with a second
-    definition is still rejected, as are namespace/class wrappers around the
-    function.
+    Leading declarations (``struct`` / ``class`` / ``union`` / ``enum`` /
+    ``namespace``, initializer lists, lambdas) are legal and skipped; the body
+    of the sole top-level function definition is returned.  Trailing code with a
+    second definition is still rejected, as is an ``extern`` wrapper around the
+    function or a ``namespace`` that carries the function body.
     """
     from re_agent.parity.source_indexer import SourceIndexer
 
     definitions, block_heads = SourceIndexer._locate_function_definitions(code)
     if any(_WRAPPER_HEAD_RE.search(head) for head in block_heads):
+        raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
+    if len(definitions) > 1 and any(_NAMESPACE_HEAD_RE.search(head) for head in block_heads):
         raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
     if not definitions:
         if block_heads:
