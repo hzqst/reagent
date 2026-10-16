@@ -71,6 +71,26 @@ def _ida_prototype(request: dict[str, Any]) -> dict[str, Any]:
     def serial(tif: Any) -> list[str]:
         return [part.hex() if part else "" for part in tif.serialize()]
 
+    def demangled_name(ea: int) -> str:
+        """Return IDA's demangled label without its argument list, or "".
+
+        MNG_NODEFINIT suppresses the parameter list and the return type stays
+        out of it, so ``_ZN13CCareerButton5PaintEv`` becomes
+        ``CCareerButton::Paint`` -- a value the caller can split on ``::``.
+
+        Purely additive: the name is a convenience for callers, never part of
+        the prototype contract, so a missing module or demangler failure
+        degrades to "" instead of failing the snapshot.
+        """
+        try:
+            name = importlib.import_module("ida_name")
+            raw = name.get_name(ea) or ""
+            if not raw:
+                return ""
+            return name.demangle_name(raw, api.MNG_NODEFINIT) or ""
+        except Exception:
+            return ""
+
     def decompile(ea: int, *, fresh: bool = False) -> tuple[Any, str]:
         if fresh:
             hx.mark_cfunc_dirty(ea, False)
@@ -91,6 +111,11 @@ def _ida_prototype(request: dict[str, Any]) -> dict[str, Any]:
             "address": hex(ea), "declaration": str(tif), "explicit": explicit,
             "serialized": serial(tif), "type_key": serial(tif)[0],
             "source": "database" if explicit else "decompiler",
+            # IDA stores the raw (mangled) label, so callers that need a C++
+            # scope (``Class::Method``) cannot split it themselves.  The
+            # demangled name is read here, where a round trip is already paid,
+            # and MNG_NODEFINIT keeps the argument list out of the result.
+            "demangled_name": demangled_name(ea),
         }
 
     def existing_type(name: str) -> Any:

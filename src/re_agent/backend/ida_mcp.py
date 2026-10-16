@@ -316,6 +316,10 @@ class IdaMcpBackend:
                     "mode": "read", "address": ida_target(target),
                 })}))["current"]
                 signature, signature_source = state["declaration"], state["source"]
+                # IDA stores raw (mangled) labels; prefer the demangled
+                # ``Class::Method`` read in the same round trip so callers can
+                # recover the class scope by splitting on ``::``.
+                name = state.get("demangled_name") or name
                 payload = {**payload, "signature": signature, "signature_source": signature_source}
             except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
                 payload = {**payload, "signature_error": str(exc)}
