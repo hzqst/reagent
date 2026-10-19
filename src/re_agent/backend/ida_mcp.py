@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from re_agent.backend import memory_view
 from re_agent.backend.protocol import BackendCapabilities
 from re_agent.core.models import (
     AnalysisArtifact,
@@ -482,7 +483,55 @@ class IdaMcpBackend:
         raise NotImplementedError("ida-mcp backend does not implement get_vtable")
 
     def get_global(self, target: str) -> AnalysisArtifact | None:
-        raise NotImplementedError("ida-mcp backend does not implement get_global")
+        """Read a global/symbol/address and describe its value.
+
+        ``get_global_value`` reports one scalar for a short item and hex bytes
+        for a longer one; neither reveals a wide literal, whose raw bytes are
+        what a caller needs to confirm a format string.  The raw bytes are read
+        separately and decoded by :mod:`re_agent.backend.memory_view`.
+
+        The artifact is informational: a malformed target or an unreadable
+        address returns ``None`` rather than raising, matching the other
+        evidence tools (the action loop reports "not found" to the model).
+        """
+        query = target.strip()
+        if not query:
+            return None
+        try:
+            described = self._call("get_global_value", {"queries": [query]})
+        except RuntimeError:
+            described = None
+        item = self._first_item(described)
+        if item is not None and item.get("error") and "type information" not in str(item["error"]):
+            # The address/symbol did not resolve; there is nothing to read.
+            # "Failed to get type information" is different: IDA knows the
+            # address but has no type for it, and the raw bytes below are still
+            # the evidence the caller needs (a wide literal is exactly that).
+            return None
+        try:
+            raw = self._call(
+                "get_bytes",
+                {"regions": [{"addr": query, "size": memory_view.DEFAULT_GLOBAL_BYTES}]},
+            )
+        except RuntimeError:
+            raw = None
+
+        region = self._first_item(raw)
+        payload: dict[str, Any] = {"query": query}
+        if item is not None:
+            payload["global_value"] = item.get("value")
+        if region is not None and isinstance(region.get("data"), str):
+            try:
+                data = bytes(int(part, 0) for part in region["data"].split())
+            except ValueError:
+                data = b""
+            if data:
+                payload["memory"] = memory_view.describe_memory(data)
+        elif region is not None and region.get("error"):
+            payload["memory_error"] = region["error"]
+        if len(payload) == 1:
+            return None
+        return AnalysisArtifact(kind="global", target=query, content=json.dumps(payload, ensure_ascii=False))
 
     def get_pcode(self, target: str) -> AnalysisArtifact | None:
         raise NotImplementedError("ida-mcp backend does not implement get_pcode")

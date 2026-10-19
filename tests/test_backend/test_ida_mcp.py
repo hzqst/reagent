@@ -525,3 +525,46 @@ def test_list_funcs_sends_glob_filter(monkeypatch):
 
     _, params = next((method, params) for method, params in calls if method == "tools/call")
     assert params["arguments"]["queries"][0]["filter"] == "sub_*"
+
+
+def test_get_global_reads_bytes_when_ida_has_no_type(monkeypatch) -> None:
+    """A wide literal has no IDA type, but its bytes are the evidence needed.
+
+    Reproduces gameui 0x1636c8: ``get_global_value`` fails with "Failed to get
+    type information" and ``get_string`` returns only the first character.
+    """
+    responses = {
+        "get_global_value": _ok({"result": [{
+            "query": "0x1636c8", "value": None,
+            "error": "Failed to get type information for variable at 0x1636c8",
+        }]}),
+        "get_bytes": _ok({"result": [{
+            "addr": "0x1636c8",
+            "data": "0x25 0x0 0x0 0x0 0x73 0x0 0x0 0x0 0x31 0x0 0x0 0x0 0x0 0x0 0x0 0x0",
+        }]}),
+    }
+    _backend(monkeypatch, responses)
+
+    artifact = IdaMcpBackend().get_global("0x1636c8")
+
+    assert artifact is not None
+    payload = json.loads(artifact.content)
+    assert payload["global_value"] is None
+    assert payload["memory"]["strings"]["utf32le"]["value"] == "%s1"
+
+
+def test_get_global_returns_none_for_an_unresolved_symbol(monkeypatch) -> None:
+    responses = {
+        "get_global_value": _ok({"result": [{"query": "nope", "value": None, "error": "Not found"}]}),
+        "get_bytes": _ok({"result": [{"addr": "nope", "data": None, "error": "Not found: 'nope'"}]}),
+    }
+    _backend(monkeypatch, responses)
+
+    assert IdaMcpBackend().get_global("nope") is None
+
+
+def test_get_global_is_reported_as_available(monkeypatch) -> None:
+    """The reverser only offers a tool the backend capability probe lists."""
+    _backend(monkeypatch, {"__tools__": ["list_globals", "get_bytes"]})
+
+    assert IdaMcpBackend().capabilities.has_globals is True
