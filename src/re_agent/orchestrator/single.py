@@ -156,7 +156,7 @@ def validate_result(
             original_source = indexer.find_by_address(target.address)
             if original_source is None:
                 original_source = matches[0] if matches else indexer.find(target.class_name, target.function_name)
-            candidate_body = extract_candidate_body(result.code)
+            candidate_body = extract_candidate_body(result.code, target)
             candidate_file = create_candidate_overlay(
                 target,
                 result.code,

@@ -19,3 +19,12 @@ ${proposed_symbol}
 ${source_context}
 
 Check every line, offset, call, branch, and expression order. Return only the JSON object required by the system prompt.
+
+Output constraint of the reverser (do not ask it to violate this):
+- The candidate carries the target function plus optional helper types. A
+  helper function may be added, but the harness needs exactly one definition
+  whose head names the target; two definitions naming the same target are
+  rejected.
+- Prefer fixes that stay inside the target function. Do not demand a separate
+  member/derived constructor definition when an inlined form preserves the
+  same instructions; the target's own definition must remain present either way.

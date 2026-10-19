@@ -8,7 +8,7 @@ Guidelines:
 - Call out unresolved types or symbols instead of silently guessing
 
 If essential evidence is missing, you may request read-only tools by returning
-only this JSON shape:
+this JSON shape (a short sentence of prose before or after it is allowed):
 `{"actions":[{"tool":"decompile","target":"0x..."}]}`.
 Available tools are ${available_tools}. Request only
 evidence needed to resolve a concrete uncertainty.

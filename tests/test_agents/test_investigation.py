@@ -150,3 +150,48 @@ def test_tool_message_states_the_remaining_budget() -> None:
 
     assert "1 of 3" in llm.messages[-1]
     assert "2 remaining" in llm.messages[-1]
+
+
+class _ProseThenActionLLM:
+    """Opens with a sentence before the request, like the real 0xb02e0 run."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_messages: list[Message] = []
+
+    def send(self, messages: list[Message], **kwargs: object) -> str:
+        self.calls += 1
+        self.last_messages = list(messages)
+        if self.calls == 1:
+            return (
+                "I need the binary bytes of the format string at 0x200.\n\n"
+                '{"actions":[{"tool":"decompile","target":"0x200"}]}'
+            )
+        return "```cpp\nvoid CTest::Foo() { ResolvedCall(); }\n```"
+
+    @property
+    def supports_conversations(self) -> bool:
+        return False
+
+    def new_conversation(self, system: str) -> str:
+        return ""
+
+    def resume(self, conversation_id: str, message: str) -> str:
+        return ""
+
+
+def test_request_preceded_by_prose_still_runs() -> None:
+    """Regression: prose before the JSON used to drop the action request."""
+    llm = _ProseThenActionLLM()
+    reverser = ReverserAgent(
+        llm,
+        StubBackend(),
+        investigation_enabled=True,
+        max_investigations=2,
+    )
+
+    code, _ = reverser.reverse(FunctionTarget("0x100", "CTest", "Foo"))
+
+    assert llm.calls == 2
+    assert "TOOL decompile(0x200)" in llm.last_messages[-1].content
+    assert "ResolvedCall" in code

@@ -34,7 +34,10 @@ Requirements:
 4. Use existing project patterns and naming conventions
 5. Output the complete function implementation in a ```cpp block
    - You may define helper structs/classes/unions/enums above the function so it
-     is self-contained, but emit exactly one function definition
+     is self-contained. Emit the target function definition; at most one extra
+     helper function (e.g. a `static inline` accessor) is allowed, and the
+     target's definition head must name ${class_name}::${function_name} exactly
+     once. Two definitions of the same target are rejected.
 6. End with: REVERSED_FUNCTION: ${class_name}::${function_name} (${address})
 7. If the evidence supports naming this function, add the ```json symbol block
    described in the system prompt. Omit it rather than guessing.

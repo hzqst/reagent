@@ -225,6 +225,40 @@ class SourceIndexer:
         return functions, block_heads
 
     @staticmethod
+    def namespace_block_spans(code: str) -> list[tuple[int, int]]:
+        """Return ``(open_brace, close_brace)`` spans of top-level ``namespace`` blocks.
+
+        Callers use this to tell a real wrapper (the function body sits inside a
+        ``namespace``) from a legal container that only holds type declarations.
+        """
+        masked = SourceIndexer._code_mask(code)
+        spans: list[tuple[int, int]] = []
+        head_start = 0
+        i = 0
+        n = len(masked)
+        while i < n:
+            ch = masked[i]
+            if ch == "(":
+                close_paren = SourceIndexer._find_matching_paren(masked, i)
+                if close_paren is None:
+                    break
+                i = close_paren + 1
+                continue
+            if ch == "{":
+                head = masked[head_start:i]
+                close_brace = SourceIndexer._find_matching_brace(masked, i)
+                if close_brace is None:
+                    break
+                if re.search(r"\bnamespace\b", head):
+                    spans.append((i, close_brace))
+                i = head_start = close_brace + 1
+                continue
+            if ch == ";":
+                head_start = i + 1
+            i += 1
+        return spans
+
+    @staticmethod
     def _find_matching_brace(text: str, open_brace_idx: int) -> int | None:
         depth = 0
         for i in SourceIndexer._code_offsets(text, open_brace_idx):

@@ -26,22 +26,33 @@ _WRAPPER_HEAD_RE = re.compile(r"^\s*extern\s*$")
 _NAMESPACE_HEAD_RE = re.compile(r"\bnamespace\b")
 
 
-def extract_candidate_body(code: str) -> str:
+def extract_candidate_body(code: str, target: FunctionTarget | None = None) -> str:
     """Extract the single top-level function body from generated code.
 
     Leading declarations (``struct`` / ``class`` / ``union`` / ``enum`` /
     ``namespace``, initializer lists, lambdas) are legal and skipped; the body
-    of the sole top-level function definition is returned.  Trailing code with a
-    second definition is still rejected, as is an ``extern`` wrapper around the
-    function or a ``namespace`` that carries the function body.
+    of the selected top-level function definition is returned.  Trailing code
+    with a second definition is still rejected, as is an ``extern`` wrapper
+    around the function or a ``namespace`` that carries the function body.
+
+    When *target* is given, a candidate that also defines a helper function (a
+    ``static inline`` accessor, an inlined sub-object constructor the checker
+    asked for) selects the definition whose head names the target.  Without a
+    target — or when no head matches it — the sole definition is required, as
+    before.
     """
     from re_agent.parity.source_indexer import SourceIndexer
 
     definitions, block_heads = SourceIndexer._locate_function_definitions(code)
     if any(_WRAPPER_HEAD_RE.search(head) for head in block_heads):
         raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
-    if len(definitions) > 1 and any(_NAMESPACE_HEAD_RE.search(head) for head in block_heads):
-        raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
+    for start, end in SourceIndexer.namespace_block_spans(code):
+        inner_definitions, _ = SourceIndexer._locate_function_definitions(code[start + 1 : end])
+        if inner_definitions:
+            raise ValueError(
+                "Candidate must contain exactly one function, without namespace/class wrappers "
+                "(the function body is inside a namespace block)"
+            )
     if not definitions:
         if block_heads:
             raise ValueError(
@@ -50,11 +61,44 @@ def extract_candidate_body(code: str) -> str:
             )
         raise ValueError("Candidate has no function body")
     if len(definitions) > 1:
-        raise ValueError(
-            f"Candidate must contain exactly one complete function body; found {len(definitions)} definitions"
-        )
+        selected = _select_target_definition(code, definitions, target)
+        if selected is None:
+            raise ValueError(
+                f"Candidate must contain exactly one complete function body; found {len(definitions)} definitions"
+            )
+        open_brace, close_brace = selected
+        return code[open_brace : close_brace + 1].strip()
     open_brace, close_brace = definitions[0]
     return code[open_brace : close_brace + 1].strip()
+
+
+def _select_target_definition(
+    code: str,
+    definitions: list[tuple[int, int]],
+    target: FunctionTarget | None,
+) -> tuple[int, int] | None:
+    """Pick the definition whose head names *target*, if exactly one does."""
+    if target is None or not target.function_name:
+        return None
+    qualified = (
+        f"{target.class_name}::{target.function_name}" if target.class_name else target.function_name
+    )
+    from re_agent.parity.source_indexer import SourceIndexer
+
+    # Scan the comment/literal-blanked mask so a ``;`` or ``{`` inside a trailing
+    # ``// ... ; ...`` note is not mistaken for a head boundary, and so an
+    # initializer brace inside the head does not cut it short.  Offsets are
+    # preserved, so the real text can be sliced with the same indices.
+    masked = SourceIndexer._code_mask(code)
+    matches: list[tuple[int, int]] = []
+    for open_brace, close_brace in definitions:
+        head_start = max(masked.rfind(";", 0, open_brace), masked.rfind("}", 0, open_brace))
+        head = code[head_start + 1 : open_brace]
+        if qualified in head:
+            matches.append((open_brace, close_brace))
+        elif not target.class_name and re.search(rf"\b{re.escape(target.function_name)}\s*\(", head):
+            matches.append((open_brace, close_brace))
+    return matches[0] if len(matches) == 1 else None
 
 
 def create_candidate_overlay(
@@ -67,7 +111,7 @@ def create_candidate_overlay(
     copy_project: bool = False,
 ) -> Path:
     """Write a source overlay with the original function body replaced."""
-    extract_candidate_body(code)
+    extract_candidate_body(code, target)
     safe_address = _sanitize_path_component(target.address)
     overlay_root: Path | None = None
     try:
@@ -111,7 +155,7 @@ def create_candidate_overlay(
         original = original_path.read_text(encoding="utf-8", errors="ignore")
         if source.body_end <= source.body_start:
             raise ValueError(f"Source body offsets unavailable for {source.path}")
-        body = extract_candidate_body(code)
+        body = extract_candidate_body(code, target)
         overlaid = original[: source.body_start] + body + original[source.body_end :]
         candidate_file.write_text(overlaid, encoding="utf-8")
         return candidate_file

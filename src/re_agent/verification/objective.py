@@ -27,7 +27,7 @@ def verify_candidate(
             findings=["Candidate code is empty"],
         )
 
-    source_body = strip_comments(_extract_candidate_body(code))
+    source_body = strip_comments(_extract_candidate_body(code, target))
     source_call_count, _, _ = count_calls(source_body)
     source_flow_count = count_control_flow(source_body)
 
@@ -147,21 +147,25 @@ def verify_candidate(
     )
 
 
-def _extract_candidate_body(code: str) -> str:
-    """Return the sole top-level function body, ignoring leading declarations.
+def _extract_candidate_body(code: str, target: FunctionTarget | None = None) -> str:
+    """Return the target top-level function body, ignoring leading declarations.
 
     Unlike the decompiler output (which ``_extract_body`` handles), a candidate
     may legitimately define helper structs before the function.  Counting calls
     and control flow over the whole file would inflate the candidate's counts
     and hide genuine shortfalls, so the candidate side uses the same locator as
-    the candidate overlay.
+    the candidate overlay.  When the candidate also defines a helper function,
+    the locator selects the definition naming *target*; falling back to the
+    first definition would score the helper's calls instead of the function's.
     """
     from re_agent.parity.source_indexer import SourceIndexer
+    from re_agent.verification.candidate import _select_target_definition
 
     definitions, _ = SourceIndexer._locate_function_definitions(code)
     if not definitions:
         return code
-    open_brace, close_brace = definitions[0]
+    selected = _select_target_definition(code, definitions, target) if len(definitions) > 1 else None
+    open_brace, close_brace = selected if selected is not None else definitions[0]
     return code[open_brace : close_brace + 1]
 
 

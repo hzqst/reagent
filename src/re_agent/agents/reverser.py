@@ -562,13 +562,84 @@ class ReverserAgent:
 
     @staticmethod
     def _extract_json(response: str) -> dict[str, object] | None:
+        """Return the protocol object carried by *response*, if any.
+
+        The protocol asks for a bare JSON object, but models routinely precede
+        or follow it with prose (``"I need the bytes at 0x...\\n\\n{...}"``).
+        Requiring the whole response to start with ``{`` silently discarded
+        those requests: the action loop then saw no ``actions`` and the prose
+        was handed to the candidate parser, which rejected it as "only type or
+        initializer blocks".  Scan top-level brace groups instead and keep the
+        first one that parses and looks like a protocol object.
+        """
         text = response.strip()
         if text.startswith("```json") and text.endswith("```"):
             text = text[7:-3].strip()
-        if not text.startswith("{"):
+
+        parsed: list[dict[str, object]] = []
+        candidate = text if text.startswith("{") else None
+        if candidate is not None:
+            payload = _load_json_object(candidate)
+            if payload is not None:
+                parsed.append(payload)
+        if not parsed:
+            parsed = [obj for obj in _iter_json_objects(text)]
+
+        if not parsed:
             return None
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        return payload if isinstance(payload, dict) else None
+        # Prefer the object that carries the protocol keys, so an unrelated JSON
+        # snippet (a symbol example, a struct sketch) never shadows a request.
+        for key in ("actions", "code", "reversed_function", "blocked", "symbol"):
+            for payload in parsed:
+                if key in payload:
+                    return payload
+        return parsed[0]
+
+
+def _load_json_object(text: str) -> dict[str, object] | None:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _iter_json_objects(text: str) -> list[dict[str, object]]:
+    """Yield every balanced top-level ``{...}`` group that parses as an object."""
+    found: list[dict[str, object]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        start = text.find("{", i)
+        if start < 0:
+            break
+        depth = 0
+        in_str = False
+        escaped = False
+        end = -1
+        for j in range(start, n):
+            ch = text[j]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end < 0:
+            break
+        payload = _load_json_object(text[start : end + 1])
+        if payload is not None:
+            found.append(payload)
+        i = end + 1
+    return found

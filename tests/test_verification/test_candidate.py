@@ -318,3 +318,63 @@ def test_discover_candidate_files_ignores_other_addresses_and_non_cpp(tmp_path: 
 
     assert discover_candidate_files(report_dir, ["0x73c5f0"]) == []
     assert discover_candidate_files(tmp_path / "missing", ["0x73c5f0"]) == []
+
+
+def test_candidate_body_selects_the_target_among_helper_functions() -> None:
+    """A leading helper function must not hide the target definition."""
+    code = (
+        "class CBox : public CBase { public: CBox() {} };\n"
+        "static inline Color &DottedColor(CLabel *p) { return *(Color *)((char *)p + 0xCC); }\n"
+        "\n"
+        "CBox::CBox(vgui2::Panel *parent)\n"
+        "    : CBase(parent, \"Box\", false)\n"
+        "{\n"
+        "    DottedColor(nullptr);\n"
+        "}\n"
+    )
+
+    body = extract_candidate_body(code, FunctionTarget("0xb82c0", "CBox", "CBox"))
+
+    assert body.startswith("{\n    DottedColor(nullptr);")
+    assert body.count("{") == 1
+
+
+def test_candidate_body_rejects_two_definitions_of_the_same_target() -> None:
+    code = "void A::F() { One(); }\nvoid A::F() { Two(); }\n"
+
+    with pytest.raises(ValueError, match="found 2 definitions"):
+        extract_candidate_body(code, FunctionTarget("0x1", "A", "F"))
+
+
+def test_candidate_body_still_rejects_a_function_inside_a_namespace() -> None:
+    code = "namespace vgui2 { class A {}; void A::F() { One(); } }\n"
+
+    with pytest.raises(ValueError, match="inside a namespace block"):
+        extract_candidate_body(code, FunctionTarget("0x1", "vgui2::A", "F"))
+
+
+def test_candidate_body_allows_a_namespace_that_only_holds_types() -> None:
+    code = "namespace vgui2 { class A {}; }\nvoid A::F() { One(); }\n"
+
+    assert extract_candidate_body(code, FunctionTarget("0x1", "A", "F")) == "{ One(); }"
+
+
+def test_candidate_body_head_boundary_ignores_semicolon_in_a_comment() -> None:
+    """A ``;`` inside a trailing ``//`` note must not cut the head.
+
+    Regression from the real 0xb02e0 candidate: the constructor head ended with
+    ``// 0xb0317; vptr = _ZTV...``, so the qualified name fell before the last
+    ``;`` and the selector could not find the target definition.
+    """
+    code = (
+        "static inline void Helper(Dar<Button *> &d, Button *e) { d.Add(e); }\n"
+        "CBox::CBox(const char *name, Panel *parent)\n"
+        "    : BaseClass(parent, name, false)   // 0xb0317; vptr = _ZTV6CBox+8\n"
+        "{\n"
+        "    Helper(nullptr, nullptr);\n"
+        "}\n"
+    )
+
+    body = extract_candidate_body(code, FunctionTarget("0xb02e0", "CBox", "CBox"))
+
+    assert body.startswith("{\n    Helper(nullptr, nullptr);")
