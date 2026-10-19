@@ -1,6 +1,7 @@
 """Tests for model-requested read-only RE investigations."""
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -195,3 +196,35 @@ def test_request_preceded_by_prose_still_runs() -> None:
     assert llm.calls == 2
     assert "TOOL decompile(0x200)" in llm.last_messages[-1].content
     assert "ResolvedCall" in code
+
+
+class _GlobalBackend(StubBackend):
+    """Stub backend with the ``global`` capability, recording what was served."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.queried: list[str] = []
+        self._caps = replace(self._caps, has_globals=True)
+
+    def get_global(self, target: str):  # type: ignore[no-untyped-def]
+        from re_agent.core.models import AnalysisArtifact
+
+        self.queried.append(target)
+        return AnalysisArtifact(kind="global", target=target,
+                                content='{"memory": {"strings": {"utf32le": {"value": "%hs"}}}}')
+
+
+def test_global_request_returns_the_decoded_memory() -> None:
+    """The model can ask for a wide literal now that ``get_global`` is served."""
+    backend = _GlobalBackend()
+    llm = _ScriptedLLM([
+        '{"actions":[{"tool":"global","target":"0x1636b8"}]}',
+        "```cpp\nvoid CTest::Foo() { UsesFmt(L\"%hs\"); }\n```",
+    ])
+    reverser = ReverserAgent(llm, backend, investigation_enabled=True, max_investigations=2)
+
+    code, _ = reverser.reverse(FunctionTarget("0x100", "CTest", "Foo"))
+
+    assert backend.queried == ["0x1636b8"]
+    assert "%hs" in llm.messages[-1]
+    assert "UsesFmt" in code
