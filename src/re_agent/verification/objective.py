@@ -8,7 +8,7 @@ import re
 from re_agent.backend.protocol import REBackend
 from re_agent.backend.stages import backend_task
 from re_agent.core.models import FunctionTarget, ObjectiveVerdict, Verdict
-from re_agent.utils.text import count_calls, count_control_flow, strip_comments
+from re_agent.utils.text import count_calls, count_control_flow, mask_non_code
 
 
 @backend_task("objective")
@@ -27,7 +27,7 @@ def verify_candidate(
             findings=["Candidate code is empty"],
         )
 
-    source_body = strip_comments(_extract_candidate_body(code, target))
+    source_body = mask_non_code(_extract_candidate_body(code, target))
     source_call_count, _, _ = count_calls(source_body)
     source_flow_count = count_control_flow(source_body)
 
@@ -43,7 +43,9 @@ def verify_candidate(
             findings=[str(exc)],
         )
 
-    decompile_body = strip_comments(_extract_body(decompile.raw_output))
+    # raw_output may be a JSON envelope, with escaped code and ref metadata.
+    # Mask before slicing so braces in literals cannot select a false body.
+    decompile_body = _extract_body(mask_non_code(decompile.decompiled))
     constant_return = re.compile(r"\{\s*return\s+(-?(?:0x[0-9a-fA-F]+|[0-9]+))\s*;\s*\}")
     expected_constant = constant_return.fullmatch(decompile_body.strip())
     actual_constant = constant_return.fullmatch(source_body.strip())

@@ -44,6 +44,12 @@ void CTrain::Shutdown() {
     assert match.has_stub_marker
 
 
+def test_flow_count_uses_original_body_before_comment_stripping(tmp_path: Path) -> None:
+    body = '{ print("http://host"); if (a && b) work(); }'
+    match = SourceIndexer(tmp_path).analyze_body("test.cpp", 1, body)
+    assert match.control_flow_count == 2
+
+
 def test_inline_forwarder_detection(tmp_path: Path) -> None:
     src = tmp_path / "test.cpp"
     src.write_text('''

@@ -5,10 +5,11 @@ import json
 
 import pytest
 
+from re_agent.backend.ida_mcp import IdaMcpBackend
 from re_agent.backend.protocol import BackendCapabilities
 from re_agent.core.models import AnalysisArtifact, DecompileResult, FunctionTarget, Verdict
 from re_agent.verification.objective import verify_candidate
-from tests.test_backend.test_ida_mcp import _repeated_calls_backend
+from tests.test_backend.test_ida_mcp import _backend, _ok, _plain_decompile, _repeated_calls_backend
 
 
 @pytest.mark.parametrize("source_calls, expected", [(6, Verdict.PASS), (0, Verdict.FAIL)])
@@ -110,4 +111,103 @@ def test_linear_cfg_blocks_do_not_imply_branching() -> None:
     blocks = [{"index": i, "out": [i + 1] if i < 7 else []} for i in range(8)]
     result = verify_candidate("int f(int x) { return x; }", FunctionTarget("100", "", "f"),
                               _CFGBackend("int f(int x) { return x; }", blocks))  # type: ignore[arg-type]
+    assert result.verdict == Verdict.PASS
+
+
+# Representative Hex-Rays output: the three occurrences of "for" are part
+# of a demangled static guard name, not loops. There are two decisions.
+STATIC_GUARD_SOURCE = """int f() {
+    if ((_BYTE)`guard variable for'Dialog::map
+        || !acquire(&`guard variable for'Dialog::map)) return map;
+    map = initialize("Dialog");
+    release(&`guard variable for'Dialog::map);
+    return map;
+}"""
+STATIC_GUARD_CANDIDATES = [
+    "int f() { if (guard || !acquire(&guard)) return map; "
+    'map = initialize("Dialog"); release(&guard); return map; }',
+    "int f() { if (guard) return map; if (!acquire(&guard)) return map; "
+    'map = initialize("Dialog"); release(&guard); return map; }',
+    "int f() { if (!guard) { if (acquire(&guard)) { "
+    'map = initialize("Dialog"); release(&guard); } } return map; }',
+]
+
+
+@pytest.mark.parametrize("candidate", STATIC_GUARD_CANDIDATES)
+def test_ida_static_guard_accepts_short_circuit_and_separate_ifs(monkeypatch, candidate: str) -> None:
+    _backend(monkeypatch, _plain_decompile(STATIC_GUARD_SOURCE))
+    result = verify_candidate(candidate, FunctionTarget("0x1", "", "f"), IdaMcpBackend(),
+                              control_flow_tolerance=1)
+    assert result.verdict == Verdict.PASS
+    assert result.findings == []
+
+
+def test_ida_static_guard_still_rejects_removed_decisions(monkeypatch) -> None:
+    _backend(monkeypatch, _plain_decompile(STATIC_GUARD_SOURCE))
+    result = verify_candidate("int f() { return map; }", FunctionTarget("0x1", "", "f"), IdaMcpBackend())
+    assert result.verdict == Verdict.FAIL
+    assert "Control-flow mismatch: decompile has 2 branches/loops, candidate has 0" in result.findings
+
+
+def test_objective_ignores_json_metadata_when_counting_decompiled_code(monkeypatch) -> None:
+    source = "int f() { if (a) return 1; if (b) return 2; return 0; }"
+    responses = _plain_decompile(source)
+    responses["decompile"] = _ok({
+        "code": source,
+        "refs": [{"name": "for while if switch", "string": "if && || ?"}],
+    })
+    _backend(monkeypatch, responses)
+    result = verify_candidate(source, FunctionTarget("0x1", "", "f"), IdaMcpBackend())
+    assert result.verdict == Verdict.PASS
+
+
+def test_ida_json_envelope_does_not_hide_constant_return_mismatch(monkeypatch) -> None:
+    _backend(monkeypatch, _plain_decompile("int f() { return 1; }"))
+    result = verify_candidate("int f() { return 2; }", FunctionTarget("0x1", "", "f"), IdaMcpBackend())
+    assert result.verdict == Verdict.FAIL
+    assert "Constant return value differs from decompiled evidence" in result.findings
+
+
+@pytest.mark.parametrize("candidate", [
+    'int f(int x) { const char *text = "if for while && || ?"; return x; }',
+    "int f(int x) { const char *text = R\"(if for while && || ?)\"; return x; }",
+])
+def test_literals_cannot_hide_removed_cfg_branching(candidate: str) -> None:
+    result = verify_candidate(candidate, FunctionTarget("100", "", "f"),
+                              _CFGBackend("unavailable", EARLY_RETURN_CFG))  # type: ignore[arg-type]
+    assert result.verdict == Verdict.FAIL
+    assert any("CFG mismatch" in finding for finding in result.findings)
+
+
+def test_call_names_in_literals_cannot_hide_removed_calls(monkeypatch) -> None:
+    backend = _repeated_calls_backend(monkeypatch)
+    source = 'void f() { print("' + "NormalizeFrustumPlane(); " * 6 + '"); }'
+    result = verify_candidate(source, FunctionTarget("0x10001100", "", "f"), backend)
+    assert result.verdict == Verdict.FAIL
+    assert "ASM call mismatch: disassembly has 6 calls, candidate has 1" in result.findings
+
+
+@pytest.mark.parametrize("decompiled, candidate", [
+    ("int f() { if (a) return 1; if (b) return 1; if (c) return 1; return 0; }",
+     "int f() { if (a || b || c) return 1; return 0; }"),
+    ("int f() { if (a) { if (b) { if (c) return 1; } } return 0; }",
+     "int f() { if (a && b && c) return 1; return 0; }"),
+    ("int f() { if (a) return 1; if (b) return 2; if (c) return 3; return 0; }",
+     "int f() { return a ? 1 : b ? 2 : c ? 3 : 0; }"),
+])
+@pytest.mark.parametrize("swap", [False, True])
+def test_equivalent_decision_counts_are_symmetric(monkeypatch, decompiled: str, candidate: str, swap: bool) -> None:
+    if swap:
+        decompiled, candidate = candidate, decompiled
+    _backend(monkeypatch, _plain_decompile(decompiled))
+    result = verify_candidate(candidate, FunctionTarget("0x1", "", "f"), IdaMcpBackend(),
+                              control_flow_tolerance=1)
+    assert result.verdict == Verdict.PASS
+
+
+def test_literal_comment_markers_do_not_hide_real_source_branches(monkeypatch) -> None:
+    source = 'int f() { print("http://host"); if (a) return 1; if (b) return 2; return 0; }'
+    _backend(monkeypatch, _plain_decompile(source))
+    result = verify_candidate(source, FunctionTarget("0x1", "", "f"), IdaMcpBackend(),
+                              control_flow_tolerance=1)
     assert result.verdict == Verdict.PASS

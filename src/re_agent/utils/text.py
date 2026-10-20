@@ -11,6 +11,19 @@ COMMENT_BLOCK_RE: re.Pattern[str] = re.compile(r"/\*.*?\*/", re.S)
 COMMENT_LINE_RE: re.Pattern[str] = re.compile(r"//.*")
 TOKEN_CALL_RE: re.Pattern[str] = re.compile(r"\b([A-Za-z_][A-Za-z0-9_:]*)\s*\(")
 CONTROL_FLOW_RE: re.Pattern[str] = re.compile(r"\b(if|for|while|switch|do|goto)\b")
+CONDITIONAL_RE: re.Pattern[str] = re.compile(r"&&|\|\||\?")
+# Match complete tokens in source order: a quote inside a comment or an IDA
+# name must not start a C++ literal. Preserve numbers so digit separators in
+# e.g. 1'000 are not mistaken for opening character quotes.
+_NON_CODE_RE: re.Pattern[str] = re.compile(
+    r"(?P<number>\b[0-9][\w.']*)"
+    r'|(?:u8|u|U|L)?R"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"'
+    r'|"(?:\\.|[^"\\])*"'
+    r"|`[^`'\r\n]*'"
+    r"|'(?:\\.|[^'\\\r\n])*'"
+    r"|//(?:\\\r?\n|[^\n])*|/\*.*?(?:\*/|$)",
+    re.S,
+)
 ASM_LINE_RE: re.Pattern[str] = re.compile(r"^[0-9a-fA-F]{8}\s+([A-Z]+)")
 
 # ---------------------------------------------------------------------------
@@ -86,6 +99,20 @@ def strip_comments(text: str) -> str:
     return COMMENT_LINE_RE.sub("", COMMENT_BLOCK_RE.sub("", text))
 
 
+def mask_non_code(text: str) -> str:
+    """Blank comments, literals and IDA quoted names, preserving offsets.
+
+    Hex-Rays prints names such as `` `guard variable for'Dialog::map``.
+    The quoted prefix is an identifier, not a loop or a character literal.
+    Recognize it before C++ quotes so it cannot hide subsequent real code.
+    """
+    def mask(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return token if match.group("number") is not None else re.sub(r"[^\n]", " ", token)
+
+    return _NON_CODE_RE.sub(mask, text)
+
+
 def count_calls(
     body_no_comments: str,
     stub_call_prefix: str = "plugin::Call",
@@ -116,9 +143,15 @@ def count_calls(
     return total, plugin, non_plugin
 
 
-def count_control_flow(body_no_comments: str) -> int:
-    """Count control-flow keywords in comment-stripped C++ source."""
-    return len(CONTROL_FLOW_RE.findall(body_no_comments))
+def count_control_flow(body: str) -> int:
+    """Estimate control flow from code keywords and conditional operators.
+
+    Each ``&&`` / ``||`` adds one potential decision, so two nested ``if``
+    statements and ``if (a && b)`` have the same count. Count ternary decisions
+    too. This is a structural heuristic, not a CFG or an equivalence proof.
+    """
+    code = mask_non_code(body)
+    return len(CONTROL_FLOW_RE.findall(code)) + len(CONDITIONAL_RE.findall(code))
 
 
 def has_fp_token(text: str) -> bool:

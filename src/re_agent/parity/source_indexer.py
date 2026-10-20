@@ -406,7 +406,7 @@ class SourceIndexer:
             call_count=total,
             plugin_call_count=plugin,
             non_plugin_call_count=non_plugin,
-            control_flow_count=count_control_flow(body_nc),
+            control_flow_count=count_control_flow(body),
             has_stub_marker=any(marker in body_nc for marker in self.stub_markers),
             has_fp_token=has_fp_token(body_nc),
             is_inline_internal_forwarder=self._is_inline_internal_forwarder(body_nc),
