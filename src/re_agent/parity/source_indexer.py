@@ -225,12 +225,26 @@ class SourceIndexer:
         return functions, block_heads
 
     @staticmethod
+    def extern_block_spans(code: str) -> list[tuple[int, int]]:
+        """Return ``(open_brace, close_brace)`` spans of top-level ``extern`` blocks.
+
+        Callers use this to tell a real wrapper (the function body sits inside
+        ``extern "C" { ... }``) from a legal block of ABI-bound declarations.
+        """
+        return SourceIndexer._block_spans(code, r"^\s*extern\b")
+
+    @staticmethod
     def namespace_block_spans(code: str) -> list[tuple[int, int]]:
         """Return ``(open_brace, close_brace)`` spans of top-level ``namespace`` blocks.
 
         Callers use this to tell a real wrapper (the function body sits inside a
         ``namespace``) from a legal container that only holds type declarations.
         """
+        return SourceIndexer._block_spans(code, r"\bnamespace\b")
+
+    @staticmethod
+    def _block_spans(code: str, head_pattern: str) -> list[tuple[int, int]]:
+        """Spans of top-level blocks whose head matches *head_pattern*."""
         masked = SourceIndexer._code_mask(code)
         spans: list[tuple[int, int]] = []
         head_start = 0
@@ -249,7 +263,7 @@ class SourceIndexer:
                 close_brace = SourceIndexer._find_matching_brace(masked, i)
                 if close_brace is None:
                     break
-                if re.search(r"\bnamespace\b", head):
+                if re.search(head_pattern, head, re.MULTILINE):
                     spans.append((i, close_brace))
                 i = head_start = close_brace + 1
                 continue

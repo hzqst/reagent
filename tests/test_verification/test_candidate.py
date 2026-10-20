@@ -378,3 +378,34 @@ def test_candidate_body_head_boundary_ignores_semicolon_in_a_comment() -> None:
     body = extract_candidate_body(code, FunctionTarget("0xb02e0", "CBox", "CBox"))
 
     assert body.startswith("{\n    Helper(nullptr, nullptr);")
+
+
+def test_extern_block_of_declarations_is_allowed() -> None:
+    """ABI-bound prototypes in ``extern "C" { ... }`` are not a wrapper.
+
+    Regression from gameui 0xcf110: the candidate bound mangled runtime
+    symbols in an extern block and was rejected for "namespace/class
+    wrappers", although the block held no function body.
+    """
+    code = (
+        'extern "C" {\n'
+        "void ABI_CDECL Frame_ctor(void *self, Panel *parent);\n"
+        "void ABI_CDECL BaseModule_ctor(void *self, const void *vtt);\n"
+        "}\n"
+        "\n"
+        "CDialog::CDialog(Panel *parent)\n"
+        "{\n"
+        "    Frame_ctor(this, parent);\n"
+        "}\n"
+    )
+
+    body = extract_candidate_body(code, FunctionTarget("0xcf110", "CDialog", "CDialog"))
+
+    assert body.startswith("{\n    Frame_ctor(this, parent);")
+
+
+def test_extern_block_that_wraps_the_function_is_still_rejected() -> None:
+    code = 'extern "C" {\nvoid A::F() { Body(); }\n}\n'
+
+    with pytest.raises(ValueError, match="inside an extern block"):
+        extract_candidate_body(code, FunctionTarget("0x1", "A", "F"))

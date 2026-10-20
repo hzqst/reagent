@@ -15,15 +15,11 @@ from re_agent.core.models import FunctionTarget, SourceMatch, ValidationVerdict,
 from re_agent.utils.address import address_key
 from re_agent.utils.process import run_process
 
-# A top-level brace block whose head looks like an ``extern "C"`` wrapper.  The
-# model is not allowed to wrap the function, so these must be reported as a
-# distinct error instead of being mistaken for a type definition.
-_WRAPPER_HEAD_RE = re.compile(r"^\s*extern\s*$")
-# A top-level ``namespace`` block is tolerated as a *type* declaration container
-# (models legitimately write ``namespace vgui2 { class ILocalize {...}; }``
-# above the function).  It is only a wrapper error when it also carries the
-# function body, which is detected via the definition count below.
-_NAMESPACE_HEAD_RE = re.compile(r"\bnamespace\b")
+# ``extern "C" { ... }`` and ``namespace`` blocks are tolerated as declaration
+# containers: models legitimately write ABI-bound prototypes and
+# ``namespace vgui2 { class ILocalize {...}; }`` above the function.  Either is
+# a wrapper error only when it also carries a function body, which is detected
+# by locating definitions inside the block rather than by its head.
 
 
 def extract_candidate_body(code: str, target: FunctionTarget | None = None) -> str:
@@ -44,8 +40,16 @@ def extract_candidate_body(code: str, target: FunctionTarget | None = None) -> s
     from re_agent.parity.source_indexer import SourceIndexer
 
     definitions, block_heads = SourceIndexer._locate_function_definitions(code)
-    if any(_WRAPPER_HEAD_RE.search(head) for head in block_heads):
-        raise ValueError("Candidate must contain exactly one function, without namespace/class wrappers")
+    # ``extern "C" { ... }`` is only a wrapper when it carries a definition.
+    # A block of ABI-bound *declarations* (the usual way a candidate binds
+    # mangled runtime symbols) is legal, exactly like a leading struct.
+    for start, end in SourceIndexer.extern_block_spans(code):
+        inner_definitions, _ = SourceIndexer._locate_function_definitions(code[start + 1 : end])
+        if inner_definitions:
+            raise ValueError(
+                "Candidate must contain exactly one function, without namespace/class wrappers "
+                "(the function body is inside an extern block)"
+            )
     for start, end in SourceIndexer.namespace_block_spans(code):
         inner_definitions, _ = SourceIndexer._locate_function_definitions(code[start + 1 : end])
         if inner_definitions:
