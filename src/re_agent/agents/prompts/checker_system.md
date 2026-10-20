@@ -6,6 +6,15 @@ Verification standards:
 - Every function call must be identified and matched
 - Expression order must match exactly (floating point is order-sensitive)
 - No missing branches, conditions, or edge cases
+- Inlined library operations may correspond to one source container operation;
+  verify the operation and its effects rather than requiring compiler expansion
+  to appear line for line in the candidate.
+- IDA may print user register aliases in place of physical register names. An
+  alias can denote different registers at different instruction addresses.
+  Use the per-instruction decoded registers; IDA aliases in comments are only
+  reading aids. For conditional moves, track the flag-setting instruction and
+  the physical destination/source. If physical operands are marked unverified,
+  do not infer operand identity or selection direction from alias names.
 - A proposed symbol must not contradict the evidence: a name that claims a
   behavior the code does not have, or a struct offset that contradicts the
   instruction reading it. Judge the symbol on its evidence — do not rewrite

@@ -470,10 +470,28 @@ with available decompile, assembly, CFG, and normalized high P-code evidence.
 It returns `FAIL` only for strong mismatches; insufficient evidence returns
 `UNKNOWN`.
 
+Inlined libstdc++ vector operations can introduce allocator calls and control
+flow absent from the original source operation. The objective verifier identifies
+bounded storage-only statements in backend decompilation and retains their text
+offsets and available IDA statement addresses in diagnostics. It preserves raw
+counts; count checks that remain incomparable return `UNKNOWN`, rather than
+forcing candidates to reproduce compiler expansion. Candidate address comments
+and the checker verdict cannot authorize this downgrade. Comparable remaining
+branches, missing named business calls, and other independent contradictions
+still return `FAIL`. Shared cold paths and unresolved temporary-container code
+can leave aggregate control-flow comparison inconclusive; this is not an
+equivalence proof. The checker and configured acceptance gates still apply.
+
 IDA assembly call counts use `CALL` instruction sites, including indirect calls
 and repeated calls to the same target. Text listings and structured instruction
 rows are supported. Unsupported row formats and responses with more instruction
 pages are treated as unavailable assembly evidence, rather than zero-call evidence.
+When `py_eval` is available, the backend also batch-decodes direct register
+operands using their register numbers and widths. Instruction text uses physical
+register names, with IDA user aliases retained as comments. Aliases are resolved
+per instruction, since the same alias may denote different registers at adjacent
+addresses. This helper is read-only. Unavailable or incomplete decoding leaves an
+explicit `Physical operands unverified` annotation in the evidence.
 
 The reversal pipeline runs the 11 built-in heuristic parity signals and configured
 semantic rules against the generated candidate body on every round. RED is blocking by default; YELLOW can be made

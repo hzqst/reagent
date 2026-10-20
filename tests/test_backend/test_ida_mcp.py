@@ -88,7 +88,10 @@ def test_disasm_counts_repeated_call_sites_in_supported_formats(monkeypatch, asm
     assert result.address == "0x10001100"
     assert result.call_count == 6
     assert result.instruction_count == 6
-    assert result.instructions == "\n".join(_CALL_LINES)
+    assert result.instructions == (
+        "\n".join(_CALL_LINES)
+        + "\n; Physical operands unverified: address rows or IDA decoder unavailable"
+    )
 
 
 @pytest.mark.parametrize("instruction, expected", [

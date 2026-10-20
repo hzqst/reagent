@@ -9,6 +9,15 @@ from re_agent.backend.protocol import REBackend
 from re_agent.backend.stages import backend_task
 from re_agent.core.models import FunctionTarget, ObjectiveVerdict, Verdict
 from re_agent.utils.text import count_calls, count_control_flow, mask_non_code
+from re_agent.verification.inline_library import (
+    has_container_abstraction,
+    has_vector_expansion,
+    mask_regions,
+    mechanical_call,
+    named_calls,
+    unresolved_vector_flow,
+    vector_regions,
+)
 
 
 @backend_task("objective")
@@ -32,6 +41,7 @@ def verify_candidate(
     source_flow_count = count_control_flow(source_body)
 
     findings: list[str] = []
+    uncertainties: list[str] = []
     checks_run = 0
 
     try:
@@ -46,6 +56,17 @@ def verify_candidate(
     # raw_output may be a JSON envelope, with escaped code and ref metadata.
     # Mask before slicing so braces in literals cannot select a false body.
     decompile_body = _extract_body(mask_non_code(decompile.decompiled))
+    # Read only backend evidence here. Candidate address comments and checker
+    # verdicts never authorize an exception to the independent verifier.
+    expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
+    regions = vector_regions(decompile.decompiled) if expanded else []
+    residual = _extract_body(mask_regions(decompile.decompiled, regions))
+    incomplete_expansion = expanded and unresolved_vector_flow(residual)
+    region_notes = [
+        f"vector storage region at text offsets {region.start}:{region.end}; "
+        f"IDA statement addresses: {', '.join(hex(ea) for ea in sorted(region.addresses)) or 'unavailable'}"
+        for region in regions
+    ]
     constant_return = re.compile(r"\{\s*return\s+(-?(?:0x[0-9a-fA-F]+|[0-9]+))\s*;\s*\}")
     expected_constant = constant_return.fullmatch(decompile_body.strip())
     actual_constant = constant_return.fullmatch(source_body.strip())
@@ -62,19 +83,26 @@ def verify_candidate(
         checks_run += 1
         call_diff = abs(decompile.callees - source_call_count)
         if call_diff >= call_count_tolerance and source_call_count < decompile.callees:
-            findings.append(
+            message = (
                 f"Call count mismatch: decompile reports {decompile.callees} callees, "
                 f"candidate has {source_call_count} calls"
             )
+            (uncertainties if expanded else findings).append(message)
 
     if decompile_flow_count >= 2:
         checks_run += 1
         flow_diff = decompile_flow_count - source_flow_count
         if flow_diff >= control_flow_tolerance and source_flow_count < decompile_flow_count:
-            findings.append(
+            message = (
                 f"Control-flow mismatch: decompile has {decompile_flow_count} branches/loops, "
                 f"candidate has {source_flow_count}"
             )
+            residual_count = count_control_flow(residual)
+            if expanded and (incomplete_expansion or residual_count - source_flow_count < control_flow_tolerance):
+                uncertainties.append(f"{message}; bounded normalization leaves {residual_count}; "
+                                     "remaining compiler expansion is not a comparable source count")
+            else:
+                findings.append(message)
 
     if backend.capabilities.has_asm:
         try:
@@ -85,9 +113,18 @@ def verify_candidate(
             checks_run += 1
             call_diff = abs(asm.call_count - source_call_count)
             if call_diff >= call_count_tolerance and source_call_count < asm.call_count:
-                findings.append(
+                message = (
                     f"ASM call mismatch: disassembly has {asm.call_count} calls, candidate has {source_call_count}"
                 )
+                mechanical = sum(mechanical_call(line) for line in asm.instructions.splitlines()) if expanded else 0
+                # Removing all recognized lowering calls is a lower bound,
+                # not a claim that every allocator call is an inline vector.
+                if expanded and asm.call_count - mechanical - source_call_count < call_count_tolerance:
+                    uncertainties.append(
+                        f"{message}; {mechanical} direct lowering/library calls make totals incomparable"
+                    )
+                else:
+                    findings.append(message)
 
     if getattr(backend.capabilities, "has_cfg", False):
         cfg = _read_ir_artifact(backend, "get_cfg", target.address)
@@ -106,10 +143,14 @@ def verify_candidate(
             )
             source_has_branching = source_flow_count > 0 or bool(re.search(r"\?|&&|\|\|", source_body))
             if branching_blocks >= control_flow_tolerance and branching_blocks > 0 and not source_has_branching:
-                findings.append(
+                message = (
                     f"CFG mismatch: binary has {branching_blocks} branching blocks, "
                     "candidate has no explicit control flow or conditional expressions"
                 )
+                if expanded and (incomplete_expansion or count_control_flow(residual) == 0):
+                    uncertainties.append(message + "; branching may belong to inline vector implementation")
+                else:
+                    findings.append(message)
 
     if getattr(backend.capabilities, "has_pcode", False):
         pcode = _read_ir_artifact(backend, "get_pcode", target.address)
@@ -120,9 +161,10 @@ def verify_candidate(
             opcodes = [str(item.get("opcode", "")).upper() for item in pcode if isinstance(item, dict)]
             ir_calls = sum(op in {"CALL", "CALLIND"} for op in opcodes)
             if ir_calls - source_call_count >= call_count_tolerance:
-                findings.append(
+                message = (
                     f"P-code call mismatch: normalized IR has {ir_calls} calls, candidate has {source_call_count}"
                 )
+                (uncertainties if expanded else findings).append(message)
             ir_returns = sum(op == "RETURN" for op in opcodes)
             source_returns = source_body.count("return")
             if ir_returns >= 2 and source_returns == 0:
@@ -130,11 +172,22 @@ def verify_candidate(
                     f"P-code return mismatch: normalized IR has {ir_returns} returns, candidate has no explicit return"
                 )
 
+    if uncertainties:
+        missing_calls = named_calls(decompile_body) - named_calls(source_body)
+        if missing_calls:
+            findings.append("Named calls missing outside library normalization: " + ", ".join(sorted(missing_calls)))
+
     if findings:
         return ObjectiveVerdict(
             verdict=Verdict.FAIL,
             summary="Objective verifier found structural mismatches",
-            findings=findings,
+            findings=[*findings, *uncertainties, *(region_notes if uncertainties else [])],
+        )
+    if uncertainties:
+        return ObjectiveVerdict(
+            verdict=Verdict.UNKNOWN,
+            summary="Inline vector expansion prevents independent aggregate count comparison",
+            findings=[*uncertainties, *region_notes],
         )
     if checks_run == 0:
         return ObjectiveVerdict(

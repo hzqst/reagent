@@ -456,11 +456,26 @@ class IdaMcpBackend:
         instructions = _render_asm(asm)
         if not instructions.strip():
             return None
+        rendered_count = len(instructions.splitlines())
+        # Display text can assign the same user alias to different physical
+        # registers at adjacent addresses. Decode each operand in IDA instead
+        # of guessing a global alias-to-register mapping from that text.
+        from re_agent.backend.ida_assembly import assembly_result, assembly_script
+
+        addresses = _asm_addresses(asm)
+        if addresses and self.capabilities.has_function_types:
+            try:
+                decoded = assembly_result(self._call("py_eval", {"code": assembly_script(addresses)}), addresses)
+                instructions = "\n".join(f"{address}  {decoded[address]}" for address in addresses)
+            except (RuntimeError, OSError, ValueError, TypeError) as exc:
+                instructions += f"\n; Physical operands unverified: {exc}"
+        else:
+            instructions += "\n; Physical operands unverified: address rows or IDA decoder unavailable"
         count = payload.get("instruction_count")
         return AsmResult(
             address=str(payload.get("addr") or target),
             instructions=instructions,
-            instruction_count=int(count) if isinstance(count, int) else len(instructions.splitlines()),
+            instruction_count=int(count) if isinstance(count, int) else rendered_count,
             call_count=len(_CALL_INSTRUCTION_RE.findall(instructions)),
             has_fp_sensitive=has_fp_asm(instructions),
         )
@@ -669,3 +684,25 @@ def _render_asm(asm: Any) -> str:
             if isinstance(value, (str, list)):
                 return _render_asm(value)
     return ""
+
+
+def _asm_addresses(asm: Any) -> list[str]:
+    """Only batch-decode complete structured instruction rows."""
+    if isinstance(asm, dict):
+        for key in ("lines", "instructions", "asm", "code"):
+            value = asm.get(key)
+            if isinstance(value, (str, list)):
+                return _asm_addresses(value)
+    if not isinstance(asm, list) or not asm:
+        return []
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for row in asm:
+        if not isinstance(row, dict) or not isinstance(row.get("addr"), str):
+            return []
+        address = row["addr"]
+        if re.fullmatch(r"(?:0x)?[0-9a-fA-F]+", address) is None or address in seen:
+            return []
+        addresses.append(address)
+        seen.add(address)
+    return addresses
