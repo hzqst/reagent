@@ -482,6 +482,16 @@ still return `FAIL`. Shared cold paths and unresolved temporary-container code
 can leave aggregate control-flow comparison inconclusive; this is not an
 equivalence proof. The checker and configured acceptance gates still apply.
 
+The same bounded handling applies to `std::sort` when backend evidence contains
+introsort/final-insertion-sort helpers and the candidate actually calls
+`std::sort`. Closed helper-only statements may be normalized; unknown pointer
+accesses, business effects, and cross-region jumps remain visible and can leave
+the comparison `UNKNOWN`. This does not cover other sorting algorithms or COW
+string destruction. Hex-Rays byte/word slices such as `BYTE1(x)` and known bit
+scan intrinsics are expressions, not missing named source calls. Other named
+business calls still require matching occurrences; absence of a matching name
+in assembly text alone never authorizes ignoring a call.
+
 IDA assembly call counts use `CALL` instruction sites, including indirect calls
 and repeated calls to the same target. Text listings and structured instruction
 rows are supported. Unsupported row formats and responses with more instruction

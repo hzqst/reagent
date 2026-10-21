@@ -11,10 +11,14 @@ from re_agent.core.models import FunctionTarget, ObjectiveVerdict, Verdict
 from re_agent.utils.text import count_calls, count_control_flow, mask_non_code
 from re_agent.verification.inline_library import (
     has_container_abstraction,
+    has_sort_abstraction,
+    has_sort_expansion,
     has_vector_expansion,
     mask_regions,
     mechanical_call,
     named_calls,
+    sort_regions,
+    unresolved_sort_flow,
     unresolved_vector_flow,
     vector_regions,
 )
@@ -58,15 +62,27 @@ def verify_candidate(
     decompile_body = _extract_body(mask_non_code(decompile.decompiled))
     # Read only backend evidence here. Candidate address comments and checker
     # verdicts never authorize an exception to the independent verifier.
-    expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
-    regions = vector_regions(decompile.decompiled) if expanded else []
+    vector_expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
+    sort_expanded = has_sort_expansion(decompile.decompiled) and has_sort_abstraction(source_body)
+    expanded = vector_expanded or sort_expanded
+    regions = vector_regions(decompile.decompiled) if vector_expanded else []
+    if sort_expanded:
+        regions.extend(sort_regions(decompile.decompiled))
     residual = _extract_body(mask_regions(decompile.decompiled, regions))
-    incomplete_expansion = expanded and unresolved_vector_flow(residual)
+    unresolved_sort = unresolved_sort_flow(residual)
+    # Unmatched algorithm expansion must not borrow the vector fallback. A
+    # candidate without sort still has to account for its remaining flow.
+    incomplete_expansion = (
+        vector_expanded and unresolved_vector_flow(residual) and not unresolved_sort
+        or sort_expanded and unresolved_sort
+    )
     region_notes = [
-        f"vector storage region at text offsets {region.start}:{region.end}; "
+        f"{region.kind} region at text offsets {region.start}:{region.end}; "
         f"IDA statement addresses: {', '.join(hex(ea) for ea in sorted(region.addresses)) or 'unavailable'}"
         for region in regions
     ]
+    if sort_expanded and unresolved_sort:
+        region_notes.append("Unresolved std::sort expansion remains visible; helper names do not prove CFG boundaries")
     constant_return = re.compile(r"\{\s*return\s+(-?(?:0x[0-9a-fA-F]+|[0-9]+))\s*;\s*\}")
     expected_constant = constant_return.fullmatch(decompile_body.strip())
     actual_constant = constant_return.fullmatch(source_body.strip())
@@ -116,9 +132,10 @@ def verify_candidate(
                 message = (
                     f"ASM call mismatch: disassembly has {asm.call_count} calls, candidate has {source_call_count}"
                 )
-                mechanical = sum(mechanical_call(line) for line in asm.instructions.splitlines()) if expanded else 0
+                mechanical = (sum(mechanical_call(line, include_sort=sort_expanded)
+                                  for line in asm.instructions.splitlines()) if expanded else 0)
                 # Removing all recognized lowering calls is a lower bound,
-                # not a claim that every allocator call is an inline vector.
+                # not a claim that every library call belongs to a region.
                 if expanded and asm.call_count - mechanical - source_call_count < call_count_tolerance:
                     uncertainties.append(
                         f"{message}; {mechanical} direct lowering/library calls make totals incomparable"
@@ -148,7 +165,7 @@ def verify_candidate(
                     "candidate has no explicit control flow or conditional expressions"
                 )
                 if expanded and (incomplete_expansion or count_control_flow(residual) == 0):
-                    uncertainties.append(message + "; branching may belong to inline vector implementation")
+                    uncertainties.append(message + "; branching may belong to inline library implementation")
                 else:
                     findings.append(message)
 
@@ -186,7 +203,7 @@ def verify_candidate(
     if uncertainties:
         return ObjectiveVerdict(
             verdict=Verdict.UNKNOWN,
-            summary="Inline vector expansion prevents independent aggregate count comparison",
+            summary="Inline library expansion prevents independent aggregate count comparison",
             findings=[*uncertainties, *region_notes],
         )
     if checks_run == 0:
