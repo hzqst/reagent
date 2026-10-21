@@ -122,6 +122,9 @@ validation, and parity gates still apply to normalized `PASS` verdicts.
 Build, test, and runtime validation now support argument arrays that execute
 directly on Windows and POSIX. On native Windows, convert shell strings to arrays;
 legacy strings still require `/bin/sh`. `re-agent doctor` reports a missing shell.
+Shell strings run via `/bin/sh -c` and inherit the re-agent process environment
+without loading login profiles. Activate required toolchains before starting re-agent
+or explicitly source their setup scripts in the validation commands.
 
 - `re-agent plan` builds bounded function manifests without model calls.
 - `re-agent reverse --manifest` reconstructs selected functions across classes,

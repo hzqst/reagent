@@ -188,6 +188,40 @@ def test_validation_gate_runs_configured_command(tmp_path: Path) -> None:
     assert verdict.verdict == Verdict.PASS
 
 
+@pytest.mark.skipif(not Path("/bin/sh").exists(), reason="POSIX shell required")
+@pytest.mark.parametrize("kind", ["build", "test", "runtime"])
+def test_shell_gate_ignores_login_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text(
+        'printf loaded > "$HOME/profile-loaded"\n. "$HOME/missing-uv-env"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("RE_AGENT_TEST_PARENT", "inherited")
+    candidate = tmp_path / "candidate.cpp"
+    candidate.write_text("void f() {}", encoding="utf-8")
+    command = 'test -f {candidate_file} && test "$RE_AGENT_TEST_PARENT" = inherited'
+
+    verdict = validate_candidate(
+        ValidationConfig(
+            build_commands=[command] if kind == "build" else [],
+            test_commands=[command] if kind == "test" else [],
+            runtime_commands=[command] if kind == "runtime" else [],
+            working_directory=str(tmp_path),
+            trust_configured_commands=True,
+        ),
+        candidate,
+        None,
+    )
+
+    assert verdict.verdict == Verdict.PASS
+    assert verdict.checks == [{"kind": kind, "verdict": "PASS", "detail": "exit 0"}]
+    assert not (home / "profile-loaded").exists()
+
+
 def test_required_build_without_command_fails(tmp_path: Path) -> None:
     candidate = tmp_path / "candidate.cpp"
     candidate.write_text("void f() {}", encoding="utf-8")

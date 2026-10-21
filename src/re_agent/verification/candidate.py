@@ -250,8 +250,9 @@ def validate_candidate(
     findings: list[str] = []
     checks: list[dict[str, str]] = []
     for kind, command in commands:
+        # Inherit the caller's environment without sourcing login profiles.
         expanded = (
-            ["/bin/sh", "-lc", _expand_shell(command)] if isinstance(command, str)
+            ["/bin/sh", "-c", _expand_shell(command)] if isinstance(command, str)
             else [_expand_argument(arg, env) for arg in command]
         )
         try:

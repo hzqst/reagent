@@ -593,8 +593,11 @@ validation:
 
 Arguments support `{candidate_file}`, `{overlay_root}`, and `{source_file}`.
 Spaces and shell metacharacters remain literal data; `$VAR` and shell syntax are
-not expanded in arrays. Legacy strings still require `/bin/sh`; doctor reports
-when it is missing. Existing isolation and command-trust requirements still
+not expanded in arrays. Legacy strings run through `/bin/sh -c`, inheriting the
+re-agent process environment without loading login profiles such as `~/.profile`.
+Activate any required toolchain environment before starting re-agent, or explicitly
+source its setup script in the command. Doctor reports when `/bin/sh` is missing.
+Existing isolation and command-trust requirements still
 apply. Non-isolated arrays must explicitly include a candidate/overlay placeholder.
 
 
