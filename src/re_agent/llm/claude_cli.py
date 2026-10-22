@@ -102,8 +102,12 @@ class ClaudeCLIProvider:
             "" if self._tools is None else self._tools,
             "--disallowedTools",
             "mcp__*",
+            # stream-json (which print mode only allows with --verbose) exposes
+            # every assistant text block of the turn; plain json keeps only the
+            # last one.  See _parse_stream for why that matters.
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--model",
             str(model or self._model),
         ]
@@ -147,7 +151,7 @@ class ClaudeCLIProvider:
             raise RuntimeError(f"Claude CLI not found: {self._claude_bin}") from exc
 
         try:
-            payload = json.loads(proc.stdout)
+            payload, blocks = _parse_stream(proc.stdout)
         except json.JSONDecodeError as exc:
             if proc.returncode != 0:
                 detail = proc.stderr.strip() or proc.stdout.strip()
@@ -170,11 +174,49 @@ class ClaudeCLIProvider:
             raise RuntimeError(f"claude CLI request failed: {detail}")
         if not isinstance(result, str):
             raise RuntimeError("claude CLI JSON payload has no text result")
+        if len(blocks) > 1:
+            # A tool-free model sometimes keeps going inside one turn: it writes
+            # pseudo tool calls (<invoke ...>), invents their results and ends
+            # with a final action.  `result` holds only that last block, so the
+            # caller would act on a conclusion drawn from fabricated evidence.
+            # Return the whole turn so the caller's one-action check rejects it.
+            return "\n\n".join(blocks)
         return result
 
     @staticmethod
     def _render_messages(messages: list[Message]) -> str:
         return "\n\n".join(f"[{m.role.upper()}]\n{m.content.strip()}" for m in messages).strip()
+
+
+def _parse_stream(stdout: str) -> tuple[object, list[str]]:
+    """Return the final ``result`` event and the turn's non-empty text blocks.
+
+    stream-json prints one event per line; the closing ``{"type": "result"}``
+    event carries the same fields as the single-object json format, which is
+    still accepted as a lone line without a ``type``.
+    """
+    events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+    if not events:
+        raise json.JSONDecodeError("empty claude CLI output", stdout, 0)
+    blocks: list[str] = []
+    payload: object = None
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "assistant":
+            message = event.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text")
+                    if isinstance(text, str) and text.strip():
+                        blocks.append(text)
+        elif kind == "result" or (kind is None and "result" in event):
+            payload = event
+    if payload is None:
+        payload = events[-1]
+    return payload, blocks
 
 
 def _string_or_none(value: object) -> str | None:
