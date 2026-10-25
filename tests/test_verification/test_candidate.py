@@ -380,6 +380,16 @@ def test_candidate_body_rejects_two_definitions_of_the_same_target() -> None:
         extract_candidate_body(code, FunctionTarget("0x1", "A", "F"))
 
 
+def test_candidate_body_ignores_target_name_in_helper_leading_comment() -> None:
+    code = (
+        "// Reconstruction of A::F\n"
+        "static inline int Helper() { return 1; }\n"
+        "void A::F() { Use(Helper()); }\n"
+    )
+
+    assert extract_candidate_body(code, FunctionTarget("0x1", "A", "F")) == "{ Use(Helper()); }"
+
+
 def test_candidate_body_still_rejects_a_function_inside_a_namespace() -> None:
     code = "namespace vgui2 { class A {}; void A::F() { One(); } }\n"
 
