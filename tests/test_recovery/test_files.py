@@ -44,6 +44,22 @@ def test_glob_lists_relative_paths(tmp_path: Path) -> None:
     assert out["files"][0]["file"].endswith("b.cpp")
 
 
+@pytest.mark.parametrize("pattern", [
+    "/refs/**/*.cpp", r"C:\refs\**\*.cpp", "C:*.cpp", r"\refs\*.cpp",
+    r"\\server\refs\*.cpp", "../*.cpp", "sub/../../*.cpp", r"..\*.cpp",
+])
+def test_glob_rejects_non_root_relative_patterns(tmp_path: Path, pattern: str) -> None:
+    root = make_root(tmp_path)
+    with pytest.raises(files.FileToolError, match="relative to a reference root"):
+        files.dispatch([root], "glob", {"pattern": pattern})
+
+
+def test_invalid_glob_is_reported_as_file_tool_error(tmp_path: Path) -> None:
+    root = make_root(tmp_path)
+    with pytest.raises(files.FileToolError, match="invalid glob pattern"):
+        files.dispatch([root], "glob", {"pattern": "**bad/*.cpp"})
+
+
 def test_path_outside_root_is_rejected(tmp_path: Path) -> None:
     root = make_root(tmp_path)
     (tmp_path / "secret.txt").write_text("SECRET\n", encoding="utf-8")

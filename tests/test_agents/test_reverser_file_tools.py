@@ -1,6 +1,7 @@
 """Opt-in host-side file tools for the reverser: confinement and budget."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -228,6 +229,25 @@ def test_unknown_file_argument_path_is_reported(tmp_path: Path) -> None:
 
     assert "void A::Tick" in code
     assert "path must be a non-empty string" in llm.messages[-1]
+
+
+@pytest.mark.parametrize("invalid_pattern", ["/refs/**/*.cpp", "**bad/*.cpp"])
+def test_invalid_glob_can_be_corrected_without_losing_file_budget(tmp_path: Path, invalid_pattern: str) -> None:
+    root = _root(tmp_path)
+    llm = _ScriptedLLM([
+        json.dumps({"actions": [{"tool": "glob", "arguments": {"pattern": invalid_pattern}}]}),
+        '{"actions":[{"tool":"glob","arguments":{"pattern":"**/*.cpp"}}]}',
+        "```cpp\nvoid A::Tick() {}\n```",
+    ])
+    reverser = ReverserAgent(llm, StubBackend(), max_investigations=0, file_roots=[root], max_file_calls=2)
+
+    code, _ = reverser.reverse(FunctionTarget("0x100", "A", "Tick"))
+
+    assert "void A::Tick" in code
+    assert "TOOL glob:" in llm.messages[1]
+    assert "File requests used: 0 of 2" in llm.messages[1]
+    assert "b.cpp" in llm.messages[2]
+    assert "File requests used: 1 of 2" in llm.messages[2]
 
 
 def test_resolve_roots_rejects_a_missing_directory(tmp_path: Path) -> None:

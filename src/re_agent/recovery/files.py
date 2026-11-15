@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 MAX_READ_BYTES = 200_000
@@ -61,7 +61,10 @@ FILE_TOOL_DEFS: list[dict[str, Any]] = [
         "description": "List files under the reference roots matching a glob pattern, e.g. '**/*.h'.",
         "inputSchema": {
             "type": "object",
-            "properties": {"pattern": {"type": "string", "description": "Glob pattern relative to each root"}},
+            "properties": {"pattern": {
+                "type": "string",
+                "description": "Glob pattern relative to each root; no absolute paths, drives or '..' components",
+            }},
             "required": ["pattern"],
             "additionalProperties": False,
         },
@@ -213,11 +216,22 @@ def glob_files(roots: list[Path], arguments: dict[str, Any]) -> dict[str, Any]:
     pattern = arguments.get("pattern")
     if not isinstance(pattern, str) or not pattern:
         raise FileToolError("pattern must be a non-empty string")
+    # Check both path flavours so a model's Windows path is also rejected on
+    # POSIX. Path.glob raises NotImplementedError for anchored patterns, which
+    # must be returned as corrective feedback rather than aborting the run.
+    native = Path(pattern)
+    windows = PureWindowsPath(pattern)
+    if native.anchor or windows.anchor or ".." in native.parts or ".." in windows.parts:
+        raise FileToolError("glob pattern must be relative to a reference root, without a drive or '..' components; "
+                            "use e.g. '**/*.cpp'")
     found: set[tuple[str, str]] = set()
-    for root in roots:
-        for match in root.glob(pattern):
-            if match.is_file() and _within(root, match.resolve()):
-                found.add((str(root), str(match.relative_to(root))))
+    try:
+        for root in roots:
+            for match in root.glob(pattern):
+                if match.is_file() and _within(root, match.resolve()):
+                    found.add((str(root), str(match.relative_to(root))))
+    except (ValueError, NotImplementedError) as exc:
+        raise FileToolError(f"invalid glob pattern: {exc}; use a root-relative pattern such as '**/*.cpp'") from None
     listed = sorted(found)[:MAX_GLOB_RESULTS]
     return {"pattern": pattern, "files": [{"root": r, "file": f} for r, f in listed], "count": len(listed)}
 
