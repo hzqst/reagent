@@ -217,13 +217,16 @@ def glob_files(roots: list[Path], arguments: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(pattern, str) or not pattern:
         raise FileToolError("pattern must be a non-empty string")
     # Check both path flavours so a model's Windows path is also rejected on
-    # POSIX. Path.glob raises NotImplementedError for anchored patterns, which
-    # must be returned as corrective feedback rather than aborting the run.
+    # POSIX. Anchored patterns must produce corrective feedback, not a crash.
     native = Path(pattern)
     windows = PureWindowsPath(pattern)
     if native.anchor or windows.anchor or ".." in native.parts or ".." in windows.parts:
         raise FileToolError("glob pattern must be relative to a reference root, without a drive or '..' components; "
                             "use e.g. '**/*.cpp'")
+    # Python 3.13 accepts embedded '**' that older pathlib versions reject.
+    # Validate explicitly so malformed requests remain uncharged on all versions.
+    if any("**" in part and part != "**" for part in native.parts):
+        raise FileToolError("invalid glob pattern: '**' must be an entire path component; use e.g. '**/*.cpp'")
     found: set[tuple[str, str]] = set()
     try:
         for root in roots:
