@@ -37,9 +37,10 @@ def test_grep_include_glob_limits_files(tmp_path: Path) -> None:
     assert files.dispatch([root], "grep", {"pattern": "void", "include": "*.cpp"})["count"] == 1
 
 
-def test_glob_lists_relative_paths(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pattern", ["**/*.cpp", "sub/*.cpp", "**/**/b.cpp"])
+def test_glob_lists_relative_paths(tmp_path: Path, pattern: str) -> None:
     root = make_root(tmp_path)
-    out = files.dispatch([root], "glob", {"pattern": "**/*.cpp"})
+    out = files.dispatch([root], "glob", {"pattern": pattern})
     assert out["count"] == 1
     assert out["files"][0]["file"].endswith("b.cpp")
 
@@ -54,10 +55,11 @@ def test_glob_rejects_non_root_relative_patterns(tmp_path: Path, pattern: str) -
         files.dispatch([root], "glob", {"pattern": pattern})
 
 
-def test_invalid_glob_is_reported_as_file_tool_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pattern", ["**bad/*.cpp", "sub/**bad/*.cpp", "sub/b**.cpp", "***/*.cpp"])
+def test_invalid_glob_is_reported_as_file_tool_error(tmp_path: Path, pattern: str) -> None:
     root = make_root(tmp_path)
     with pytest.raises(files.FileToolError, match="invalid glob pattern"):
-        files.dispatch([root], "glob", {"pattern": "**bad/*.cpp"})
+        files.dispatch([root], "glob", {"pattern": pattern})
 
 
 def test_path_outside_root_is_rejected(tmp_path: Path) -> None:
