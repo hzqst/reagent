@@ -123,6 +123,7 @@ def fetch_ghidra_data(address: str, backend: REBackend) -> GhidraData:
         data.decompile_ok = True
         data.callers = dec.callers
         data.callees = dec.callees
+        data.decompiled = dec.decompiled
         data.decompile_has_nan = "NAN" in dec.decompiled.upper() if dec.decompiled else False
     except Exception as exc:
         data.decompile_ok = False
@@ -136,6 +137,7 @@ def fetch_ghidra_data(address: str, backend: REBackend) -> GhidraData:
                 data.asm_ok = True
                 data.asm_instruction_count = asm.instruction_count
                 data.asm_call_count = asm.call_count
+                data.asm_instructions = asm.instructions
                 data.asm_has_fp_sensitive = has_fp_asm(asm.instructions)
         except Exception as exc:
             data.asm_ok = False
