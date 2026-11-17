@@ -500,6 +500,16 @@ P-code targets keep same-named calls. Qualified/member calls and unrecognized
 helpers are retained. Named-call checks still detect missing business-call
 occurrences after normalization, including deficits below the count tolerance.
 
+The same decompiled-only normalization covers x86 intrinsic families `_mm_*`,
+`_mm256_*`, `_mm512_*`, and `__builtin_ia32_*`, plus the exact half-conversion
+aliases `_cvtss_sh` and `_cvtsh_ss`. A decompiler may use these call-like names
+for SIMD instructions generated from ordinary scalar source. Their absence
+from a candidate does not establish a missing source call. If these expressions
+are the only discrepancy and the other checks pass, the objective verdict is
+`PASS`; independent evidence gaps still produce `UNKNOWN`, and contradictions
+still produce `FAIL`. Missing symbols or matching assembly names alone never
+authorize ignoring an otherwise unknown call.
+
 Inlined libstdc++ vector operations can introduce allocator calls and control
 flow absent from the original source operation. The objective verifier identifies
 bounded storage-only statements in backend decompilation and retains their text

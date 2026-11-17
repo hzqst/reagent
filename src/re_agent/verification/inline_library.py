@@ -11,7 +11,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from re_agent.utils.call_evidence import asm_call_evidence, is_hexrays_expression
+from re_agent.utils.call_evidence import asm_call_evidence, is_decompiler_expression
 from re_agent.utils.text import CPP_KEYWORDS, TOKEN_CALL_RE, mask_non_code
 
 _STORAGE = re.compile(
@@ -56,7 +56,7 @@ def _mask_template_arguments(code: str) -> str:
 
 
 def _pseudo_call(name: str, *, decompiled: bool = True) -> bool:
-    return name in _BIT_INTRINSICS or decompiled and is_hexrays_expression(name)
+    return name in _BIT_INTRINSICS or decompiled and is_decompiler_expression(name)
 
 
 @dataclass(frozen=True)
@@ -283,7 +283,7 @@ def named_calls(code: str, *, decompiled: bool = True) -> Counter[str]:
         and call[1] not in _SORT_NAMES
         and not call[1].startswith("__")
         and not call[1].split("::")[-1].startswith(("_M_", "_Z"))
-        and (is_hexrays_expression(call[1]) or not re.fullmatch(r"(?:v\d+|operator|[A-Z_]+)", call[1]))
+        and (is_decompiler_expression(call[1]) or not re.fullmatch(r"(?:v\d+|operator|[A-Z_]+)", call[1]))
     )
 
 

@@ -23,6 +23,10 @@ _HEX_RAYS_ACCESS = re.compile(
 _HEX_RAYS_COERCIONS = frozenset({
     "COERCE_FLOAT", "COERCE_DOUBLE", "COERCE_LONG_DOUBLE", "COERCE_UNSIGNED_INT", "COERCE_UNSIGNED_INT64",
 })
+# SIMD instructions may be rendered as call-like expressions even when the
+# source used scalar operations. Match reserved families, not arbitrary _cvt*.
+_X86_INTRINSICS = re.compile(r"(?:_mm(?:256|512)?_|__builtin_ia32_)[A-Za-z0-9_]+")
+_X86_INTRINSIC_ALIASES = frozenset({"_cvtss_sh", "_cvtsh_ss"})
 
 _PIC = re.compile(r"__(?:x86|i686)\.get_pc_thunk\.(?:ax|bx|cx|dx|si|di|bp)")
 _ALLOCATION = re.compile(
@@ -86,9 +90,12 @@ class CallEvidence:
         )]
 
 
-def is_hexrays_expression(target: str) -> bool:
-    """Recognize exact access/coercion spellings, without classifying real targets."""
-    return _HEX_RAYS_ACCESS.fullmatch(target) is not None or target in _HEX_RAYS_COERCIONS
+def is_decompiler_expression(target: str) -> bool:
+    """Recognize wrappers/intrinsics without classifying actual call targets."""
+    return (
+        _HEX_RAYS_ACCESS.fullmatch(target) is not None or target in _HEX_RAYS_COERCIONS
+        or _X86_INTRINSICS.fullmatch(target) is not None or target in _X86_INTRINSIC_ALIASES
+    )
 
 
 def classify_target(target: str) -> tuple[CallKind, str]:
@@ -113,7 +120,7 @@ def classify_target(target: str) -> tuple[CallKind, str]:
 
 
 def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
-    """Read lexical occurrences; normalize known wrappers only in decompiler text.
+    """Read lexical occurrences; normalize known expressions only in decompiler text.
 
     Wrappers retain their raw sites and offsets. Scanning continues through
     their arguments, preserving nested business calls and repeated occurrences.
@@ -131,9 +138,10 @@ def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
         if target in CPP_KEYWORDS or target == "operator" or target.endswith("::operator"):
             continue
         kind, reason = classify_target(target)
-        if (decompiled and is_hexrays_expression(target)
+        if (decompiled and is_decompiler_expression(target)
                 and not re.search(r"(?:\.|->|::)\s*$", masked[:match.start()])):
-            kind, reason = "decompiler_expr", "known Hex-Rays access/coercion expression, not a machine call"
+            kind = "decompiler_expr"
+            reason = "known Hex-Rays access/coercion or x86 intrinsic expression, not a source-call requirement"
         sites.append(CallSite(f"text offset {match.start()}", target, kind, reason, match.start(), match.end()))
     return CallEvidence(tuple(sorted(sites, key=lambda site: site.start)), len(sites))
 
