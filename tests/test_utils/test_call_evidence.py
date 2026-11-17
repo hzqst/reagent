@@ -102,3 +102,74 @@ def test_unresolved_pcode_and_callind_do_not_claim_named_call_evidence() -> None
     assert calls.count("pic") == 1
     assert calls.count("lifetime") == 1
     assert calls.count("unresolved") == 2
+
+
+@pytest.mark.parametrize("macro", [
+    "LOBYTE", "LOWORD", "LODWORD", "HIBYTE", "HIWORD", "HIDWORD",
+    "SLOBYTE", "SLOWORD", "SLODWORD", "SHIBYTE", "SHIWORD", "SHIDWORD",
+    "BYTE1", "BYTE15", "WORD1", "WORD7", "DWORD1", "DWORD3",
+    "SBYTE1", "SBYTE15", "SWORD1", "SWORD7", "SDWORD1", "SDWORD3",
+    "BYTEn", "WORDn", "DWORDn", "SBYTEn", "SWORDn", "SDWORDn",
+    "COERCE_FLOAT", "COERCE_DOUBLE", "COERCE_LONG_DOUBLE", "COERCE_UNSIGNED_INT", "COERCE_UNSIGNED_INT64",
+])
+def test_decompiler_expression_wrappers_keep_nested_calls_and_raw_evidence(macro: str) -> None:
+    code = f"{macro}(real_call())"
+    calls = code_call_evidence(code, decompiled=True)
+    assert calls.raw_count == 2
+    assert calls.count("ordinary") == 1
+    assert calls.count("decompiler_expr") == 1
+    assert calls.complete and calls.comparable
+    assert [macro, "real_call"] == [site.target for site in calls.sites]
+    assert "Hex-Rays" in calls.sites[0].reason
+    assert code_call_evidence(code).count("ordinary") == 2
+    assert asm_call_evidence(f"100 call {macro}", 1).count("ordinary") == 1
+    assert pcode_call_evidence([{"opcode": "CALL", "target": macro}]).count("ordinary") == 1
+
+
+def test_cdtrack_decompiler_calls_preserve_occurrences_and_diagnostics() -> None:
+    code = '''LODWORD(track[28]) = MSG_ReadByte();
+LODWORD(track[29]) = MSG_ReadByte();
+if (!COM_CheckParm("-nocdaudio")) queued = LODWORD(track[28]);'''
+    calls = code_call_evidence(code, decompiled=True)
+    assert calls.raw_count == 6
+    assert calls.count("ordinary") == 3
+    assert calls.count("decompiler_expr") == 3
+    assert calls.complete and calls.comparable
+    assert [
+        site.target for site in calls.sites if site.kind == "ordinary"
+    ] == ["MSG_ReadByte", "MSG_ReadByte", "COM_CheckParm"]
+    assert any("raw 6" in note and "ordinary 3" in note for note in calls.diagnostics("Decompile"))
+    assert sum("LODWORD" in note and "text offset" in note for note in calls.diagnostics("Decompile")) == 3
+
+
+def test_mask_decompiler_wrappers_preserves_nested_calls_offsets_and_newlines() -> None:
+    code = "LODWORD\n(\nHIDWORD(real_call())); BYTEn(other_call(), index_call());"
+    remaining = mask_nonordinary_calls(code, decompiled=True)
+    assert len(code) == len(remaining)
+    assert code.index("\n") == remaining.index("\n")
+    assert code.index("real_call") == remaining.index("real_call")
+    assert [
+        site.target for site in code_call_evidence(remaining).sites
+    ] == ["real_call", "other_call", "index_call"]
+    assert code == mask_nonordinary_calls(code)
+
+
+@pytest.mark.parametrize("expression", [
+    "Business::LODWORD(x)", "::LODWORD(x)", "object.LODWORD(x)", "object -> LODWORD(x)",
+    "object. /* member */ BYTE1(x)", "Business::BYTE1(x)", "Business::COERCE_FLOAT(x)",
+    "LODWORDHelper(x)", "BYTE1Helper(x)", "BYTE16(x)", "WORD8(x)", "DWORD4(x)",
+    "COERCE_CUSTOM(x)", "__ROL4__(x, 1)", "__OFADD__(x, y)", "is_mul_ok(x, y)",
+])
+def test_macro_lookalikes_and_other_helpers_are_retained(expression: str) -> None:
+    calls = code_call_evidence(expression, decompiled=True)
+    assert calls.count("ordinary") == 1
+    assert calls.count("decompiler_expr") == 0
+
+
+def test_comments_and_literals_cannot_supply_decompiler_expressions() -> None:
+    code = '''// LODWORD(fake());
+const char *text = "COERCE_FLOAT(fake())";
+real_call();'''
+    calls = code_call_evidence(code, decompiled=True)
+    assert calls.raw_count == 1
+    assert calls.sites[0].target == "real_call"

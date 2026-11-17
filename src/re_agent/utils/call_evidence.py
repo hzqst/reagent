@@ -1,8 +1,8 @@
 """Call-site evidence shared by structural verification and parity.
 
-Raw backend totals remain intact. Only exact, resolved PIC thunks can be
-discarded; allocation/deallocation and unresolved targets prevent treating an
-aggregate machine-call count as a source-call count.
+Raw totals remain intact. Exact PIC thunks and known expression wrappers in
+decompiler text do not establish source calls; allocation/deallocation and
+unresolved targets prevent treating an aggregate machine count as a source count.
 """
 from __future__ import annotations
 
@@ -12,7 +12,17 @@ from typing import Literal
 
 from re_agent.utils.text import CPP_KEYWORDS, TOKEN_CALL_RE, mask_non_code
 
-CallKind = Literal["ordinary", "pic", "lifetime", "unresolved"]
+CallKind = Literal["ordinary", "pic", "lifetime", "unresolved", "decompiler_expr"]
+
+# Hex-Rays partial-access macros from defs.h. Numbered aliases cover parts of
+# up to 128-bit values; do not exempt arbitrary names sharing these prefixes.
+# https://hex-rays.com/blog/igors-tip-of-the-week-67-decompiler-helpers
+_HEX_RAYS_ACCESS = re.compile(
+    r"S?(?:(?:HI|LO)(?:BYTE|WORD|DWORD)|BYTE(?:[1-9]|1[0-5])|WORD[1-7]|DWORD[1-3]|(?:BYTE|WORD|DWORD)n)"
+)
+_HEX_RAYS_COERCIONS = frozenset({
+    "COERCE_FLOAT", "COERCE_DOUBLE", "COERCE_LONG_DOUBLE", "COERCE_UNSIGNED_INT", "COERCE_UNSIGNED_INT64",
+})
 
 _PIC = re.compile(r"__(?:x86|i686)\.get_pc_thunk\.(?:ax|bx|cx|dx|si|di|bp)")
 _ALLOCATION = re.compile(
@@ -66,7 +76,7 @@ class CallEvidence:
         return (
             f"raw {self.raw_count} calls; PIC {self.count('pic')}; lifetime {self.count('lifetime')}; "
             f"ordinary {self.count('ordinary')}; unresolved {self.count('unresolved')}; "
-            f"parsed {len(self.sites)} sites"
+            f"decompiler expressions {self.count('decompiler_expr')}; parsed {len(self.sites)} sites"
         )
 
     def diagnostics(self, origin: str) -> list[str]:
@@ -74,6 +84,11 @@ class CallEvidence:
             f"{origin} call at {site.location}: {site.target or '<unknown>'} [{site.kind}]: {site.reason}"
             for site in self.sites if site.kind != "ordinary"
         )]
+
+
+def is_hexrays_expression(target: str) -> bool:
+    """Recognize exact access/coercion spellings, without classifying real targets."""
+    return _HEX_RAYS_ACCESS.fullmatch(target) is not None or target in _HEX_RAYS_COERCIONS
 
 
 def classify_target(target: str) -> tuple[CallKind, str]:
@@ -97,8 +112,12 @@ def classify_target(target: str) -> tuple[CallKind, str]:
     return "ordinary", "direct named call retained"
 
 
-def code_call_evidence(code: str) -> CallEvidence:
-    """Read lexical call occurrences, retaining repeated named calls."""
+def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
+    """Read lexical occurrences; normalize known wrappers only in decompiler text.
+
+    Wrappers retain their raw sites and offsets. Scanning continues through
+    their arguments, preserving nested business calls and repeated occurrences.
+    """
     masked = mask_non_code(code)
     sites: list[CallSite] = []
     for match in _SPECIAL_CODE_CALL.finditer(masked):
@@ -112,16 +131,19 @@ def code_call_evidence(code: str) -> CallEvidence:
         if target in CPP_KEYWORDS or target == "operator" or target.endswith("::operator"):
             continue
         kind, reason = classify_target(target)
+        if (decompiled and is_hexrays_expression(target)
+                and not re.search(r"(?:\.|->|::)\s*$", masked[:match.start()])):
+            kind, reason = "decompiler_expr", "known Hex-Rays access/coercion expression, not a machine call"
         sites.append(CallSite(f"text offset {match.start()}", target, kind, reason, match.start(), match.end()))
     return CallEvidence(tuple(sorted(sites, key=lambda site: site.start)), len(sites))
 
 
-def mask_nonordinary_calls(code: str) -> str:
-    """Hide ABI/unknown call names, preserving arguments and text offsets."""
+def mask_nonordinary_calls(code: str, *, decompiled: bool = False) -> str:
+    """Hide non-call/ABI/unknown names, preserving arguments and text offsets."""
     masked = mask_non_code(code)
-    for site in code_call_evidence(code).sites:
+    for site in code_call_evidence(code, decompiled=decompiled).sites:
         if site.kind != "ordinary":
-            masked = masked[:site.start] + " " * (site.end - site.start) + masked[site.end:]
+            masked = masked[:site.start] + re.sub(r"[^\n]", " ", masked[site.start:site.end]) + masked[site.end:]
     return masked
 
 
