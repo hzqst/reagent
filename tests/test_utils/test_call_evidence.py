@@ -111,6 +111,9 @@ def test_unresolved_pcode_and_callind_do_not_claim_named_call_evidence() -> None
     "SBYTE1", "SBYTE15", "SWORD1", "SWORD7", "SDWORD1", "SDWORD3",
     "BYTEn", "WORDn", "DWORDn", "SBYTEn", "SWORDn", "SDWORDn",
     "COERCE_FLOAT", "COERCE_DOUBLE", "COERCE_LONG_DOUBLE", "COERCE_UNSIGNED_INT", "COERCE_UNSIGNED_INT64",
+    "_mm_add_epi64", "_mm_cvtsi128_si32", "_mm_cvtsi32_si128", "_mm_loadl_epi64", "_mm_srli_epi64",
+    "_mm_unpacklo_epi32", "_mm256_add_epi64", "_mm512_add_epi64", "__builtin_ia32_paddq128",
+    "_cvtss_sh", "_cvtsh_ss",
 ])
 def test_decompiler_expression_wrappers_keep_nested_calls_and_raw_evidence(macro: str) -> None:
     code = f"{macro}(real_call())"
@@ -142,8 +145,9 @@ if (!COM_CheckParm("-nocdaudio")) queued = LODWORD(track[28]);'''
     assert sum("LODWORD" in note and "text offset" in note for note in calls.diagnostics("Decompile")) == 3
 
 
-def test_mask_decompiler_wrappers_preserves_nested_calls_offsets_and_newlines() -> None:
-    code = "LODWORD\n(\nHIDWORD(real_call())); BYTEn(other_call(), index_call());"
+@pytest.mark.parametrize("wrapper", ["LODWORD", "_mm_add_epi64", "__builtin_ia32_paddq128", "_cvtss_sh"])
+def test_mask_decompiler_wrappers_preserves_nested_calls_offsets_and_newlines(wrapper: str) -> None:
+    code = f"{wrapper}\n(\nHIDWORD(real_call())); BYTEn(other_call(), index_call());"
     remaining = mask_nonordinary_calls(code, decompiled=True)
     assert len(code) == len(remaining)
     assert code.index("\n") == remaining.index("\n")
@@ -159,6 +163,11 @@ def test_mask_decompiler_wrappers_preserves_nested_calls_offsets_and_newlines() 
     "object. /* member */ BYTE1(x)", "Business::BYTE1(x)", "Business::COERCE_FLOAT(x)",
     "LODWORDHelper(x)", "BYTE1Helper(x)", "BYTE16(x)", "WORD8(x)", "DWORD4(x)",
     "COERCE_CUSTOM(x)", "__ROL4__(x, 1)", "__OFADD__(x, y)", "is_mul_ok(x, y)",
+    "Business::_mm_add_epi64(x)", "::_mm_add_epi64(x)", "object._mm_add_epi64(x)",
+    "object -> _mm_add_epi64(x)", "object. /* member */ _mm_add_epi64(x)",
+    "Business::__builtin_ia32_paddq128(x)", "object._cvtss_sh(x)", "Business::_cvtsh_ss(x)",
+    "_mmHelper(x)", "_mm256Helper(x)", "_mm512Helper(x)", "_mm1024_add_epi64(x)",
+    "__builtin_ia32Helper(x)", "_cvtss_shHelper(x)", "_cvt_custom(x)",
 ])
 def test_macro_lookalikes_and_other_helpers_are_retained(expression: str) -> None:
     calls = code_call_evidence(expression, decompiled=True)
@@ -169,6 +178,8 @@ def test_macro_lookalikes_and_other_helpers_are_retained(expression: str) -> Non
 def test_comments_and_literals_cannot_supply_decompiler_expressions() -> None:
     code = '''// LODWORD(fake());
 const char *text = "COERCE_FLOAT(fake())";
+// _mm_add_epi64(fake());
+const char *simd = "__builtin_ia32_paddq128(fake())";
 real_call();'''
     calls = code_call_evidence(code, decompiled=True)
     assert calls.raw_count == 1
