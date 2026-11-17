@@ -474,7 +474,7 @@ It returns `FAIL` only for strong mismatches; insufficient evidence returns
 `UNKNOWN`.
 
 Call checks preserve raw backend totals and classify individual call sites using
-the same rules for decompiled code, assembly, P-code, and parity. Exact
+shared ABI rules for decompiled code, assembly, P-code, and parity. Exact
 `__x86.get_pc_thunk.*` / `__i686.get_pc_thunk.*` targets are PIC setup, not
 source calls. Recognized global `operator new` / `operator delete` variants
 (including sized, array, and mangled forms) are lifetime evidence: they are
@@ -487,6 +487,18 @@ categories, and reasons; repeated ordinary calls remain separate occurrences.
 GOT operands, comments, and whole `__cxa_*` / `_Unwind_*` symbol families are
 not exempt. Parity reports inconclusive call comparisons as INFO, including
 legacy snapshots that provide only totals; comparable deficits still warn.
+
+Decompiled-text checks additionally recognize Hex-Rays partial-access macros
+(`LOBYTE`/`LOWORD`/`LODWORD`, their high-part and signed variants, numbered
+byte/word/dword slices, and indexed `BYTEn`/`WORDn`/`DWORDn` variants) and the
+documented `COERCE_*` bit-pattern conversions. These expression wrappers retain
+their raw lexical sites, text offsets, and classification reasons but do not
+increase the ordinary-call lower bound or make otherwise complete evidence
+inconclusive. Calls inside their arguments still count. The normalization also
+applies to parity's decompiled-call signal; candidate source and actual ASM or
+P-code targets keep same-named calls. Qualified/member calls and unrecognized
+helpers are retained. Named-call checks still detect missing business-call
+occurrences after normalization, including deficits below the count tolerance.
 
 Inlined libstdc++ vector operations can introduce allocator calls and control
 flow absent from the original source operation. The objective verifier identifies

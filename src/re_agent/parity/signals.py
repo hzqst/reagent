@@ -92,7 +92,7 @@ def check_low_call_count(
     if ghidra.decompiled is not None:
         # Exclude the function declaration, which is not a call occurrence.
         body = mask_non_code(ghidra.decompiled).partition("{")[2]
-        calls = code_call_evidence(body)
+        calls = code_call_evidence(body, decompiled=True)
         if calls.count("ordinary") >= 6 and source_calls <= 1:
             return Finding(
                 level="yellow",

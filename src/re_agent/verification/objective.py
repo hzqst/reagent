@@ -58,7 +58,7 @@ def verify_candidate(
 
     def check_calls(evidence: CallEvidence, origin: str, message: str, *, lowering: int = 0,
                     library_expansion: bool = False) -> None:
-        if evidence.count("pic") or not evidence.comparable:
+        if evidence.count("pic") or evidence.count("decompiler_expr") or not evidence.comparable:
             call_notes.extend(evidence.diagnostics(origin))
         if not evidence.comparable:
             uncertainties.append(f"{origin} call comparison is inconclusive: {evidence.describe()}")
@@ -87,7 +87,7 @@ def verify_candidate(
     # raw_output may be a JSON envelope, with escaped code and ref metadata.
     # Mask before slicing so braces in literals cannot select a false body.
     decompile_body = _extract_body(mask_non_code(decompile.decompiled))
-    decompile_calls = code_call_evidence(decompile_body)
+    decompile_calls = code_call_evidence(decompile_body, decompiled=True)
     # Read only backend evidence here. Candidate address comments and checker
     # verdicts never authorize an exception to the independent verifier.
     vector_expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
@@ -127,7 +127,8 @@ def verify_candidate(
         checks_run += 1
         check_calls(
             decompile_calls, "Decompile",
-            f"Decompiled call mismatch: decompiled body has {decompile_calls.raw_count} call sites, "
+            f"Decompiled call mismatch: decompiled body has {decompile_calls.count('ordinary')} ordinary call sites "
+            f"(raw lexical sites {decompile_calls.raw_count}), "
             f"candidate has {source_call_count} calls",
             library_expansion=expanded,
         )
@@ -222,8 +223,8 @@ def verify_candidate(
                 )
 
     if uncertainties or call_notes:
-        missing_calls = named_calls(mask_nonordinary_calls(decompile_body)) - named_calls(
-            mask_nonordinary_calls(source_body)
+        missing_calls = named_calls(mask_nonordinary_calls(decompile_body, decompiled=True)) - named_calls(
+            mask_nonordinary_calls(source_body), decompiled=False,
         )
         if missing_calls:
             findings.append("Named calls missing outside library normalization: " + ", ".join(
