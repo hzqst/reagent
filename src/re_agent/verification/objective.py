@@ -8,7 +8,14 @@ import re
 from re_agent.backend.protocol import REBackend
 from re_agent.backend.stages import backend_task
 from re_agent.core.models import FunctionTarget, ObjectiveVerdict, Verdict
-from re_agent.utils.text import count_calls, count_control_flow, mask_non_code
+from re_agent.utils.call_evidence import (
+    CallEvidence,
+    asm_call_evidence,
+    code_call_evidence,
+    mask_nonordinary_calls,
+    pcode_call_evidence,
+)
+from re_agent.utils.text import count_control_flow, mask_non_code
 from re_agent.verification.inline_library import (
     has_container_abstraction,
     has_sort_abstraction,
@@ -41,12 +48,32 @@ def verify_candidate(
         )
 
     source_body = mask_non_code(_extract_candidate_body(code, target))
-    source_call_count, _, _ = count_calls(source_body)
+    source_call_count = code_call_evidence(source_body).count("ordinary")
     source_flow_count = count_control_flow(source_body)
 
     findings: list[str] = []
     uncertainties: list[str] = []
+    call_notes: list[str] = []
     checks_run = 0
+
+    def check_calls(evidence: CallEvidence, origin: str, message: str, *, lowering: int = 0,
+                    library_expansion: bool = False) -> None:
+        if evidence.count("pic") or not evidence.comparable:
+            call_notes.extend(evidence.diagnostics(origin))
+        if not evidence.comparable:
+            uncertainties.append(f"{origin} call comparison is inconclusive: {evidence.describe()}")
+        # Direct retained calls provide a lower bound. Unknown/implicit calls
+        # cannot increase the source's budget or hide an independent deficit.
+        deficit = evidence.count("ordinary") - source_call_count
+        if evidence.complete and deficit >= call_count_tolerance and deficit > 0:
+            if library_expansion and deficit - lowering < call_count_tolerance:
+                uncertainties.append(
+                    f"{message}; {lowering} direct lowering/library calls make totals incomparable"
+                )
+            elif library_expansion and origin == "Decompile":
+                uncertainties.append(message)
+            else:
+                findings.append(message)
 
     try:
         decompile = backend.decompile(target.address)
@@ -60,6 +87,7 @@ def verify_candidate(
     # raw_output may be a JSON envelope, with escaped code and ref metadata.
     # Mask before slicing so braces in literals cannot select a false body.
     decompile_body = _extract_body(mask_non_code(decompile.decompiled))
+    decompile_calls = code_call_evidence(decompile_body)
     # Read only backend evidence here. Candidate address comments and checker
     # verdicts never authorize an exception to the independent verifier.
     vector_expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
@@ -95,15 +123,23 @@ def verify_candidate(
         if integer(expected_constant.group(1)) != integer(actual_constant.group(1)):
             findings.append("Constant return value differs from decompiled evidence")
     decompile_flow_count = count_control_flow(decompile_body)
+    if "{" in decompile_body and decompile_calls.raw_count:
+        checks_run += 1
+        check_calls(
+            decompile_calls, "Decompile",
+            f"Decompiled call mismatch: decompiled body has {decompile_calls.raw_count} call sites, "
+            f"candidate has {source_call_count} calls",
+            library_expansion=expanded,
+        )
     if decompile.callees is not None:
         checks_run += 1
-        call_diff = abs(decompile.callees - source_call_count)
-        if call_diff >= call_count_tolerance and source_call_count < decompile.callees:
-            message = (
-                f"Call count mismatch: decompile reports {decompile.callees} callees, "
-                f"candidate has {source_call_count} calls"
+        if decompile.callees - source_call_count >= call_count_tolerance and decompile.callees > source_call_count:
+            # This is a backend's callee-list cardinality, not a call-site
+            # count. Without individual targets it cannot establish a FAIL.
+            uncertainties.append(
+                f"Backend reports {decompile.callees} callees, candidate has {source_call_count} calls; "
+                "callee totals and source call sites are not directly comparable"
             )
-            (uncertainties if expanded else findings).append(message)
 
     if decompile_flow_count >= 2:
         checks_run += 1
@@ -127,21 +163,16 @@ def verify_candidate(
             asm = None
         if asm is not None:
             checks_run += 1
-            call_diff = abs(asm.call_count - source_call_count)
-            if call_diff >= call_count_tolerance and source_call_count < asm.call_count:
-                message = (
-                    f"ASM call mismatch: disassembly has {asm.call_count} calls, candidate has {source_call_count}"
-                )
-                mechanical = (sum(mechanical_call(line, include_sort=sort_expanded)
-                                  for line in asm.instructions.splitlines()) if expanded else 0)
-                # Removing all recognized lowering calls is a lower bound,
-                # not a claim that every library call belongs to a region.
-                if expanded and asm.call_count - mechanical - source_call_count < call_count_tolerance:
-                    uncertainties.append(
-                        f"{message}; {mechanical} direct lowering/library calls make totals incomparable"
-                    )
-                else:
-                    findings.append(message)
+            asm_calls = asm_call_evidence(asm.instructions, asm.call_count)
+            mechanical = sum(
+                site.kind == "ordinary" and mechanical_call(f"call {site.target}", include_sort=sort_expanded)
+                for site in asm_calls.sites
+            ) if expanded else 0
+            check_calls(
+                asm_calls, "ASM",
+                f"ASM call mismatch: disassembly has {asm.call_count} calls, candidate has {source_call_count}",
+                lowering=mechanical, library_expansion=expanded,
+            )
 
     if getattr(backend.capabilities, "has_cfg", False):
         cfg = _read_ir_artifact(backend, "get_cfg", target.address)
@@ -176,12 +207,13 @@ def verify_candidate(
         if isinstance(pcode, list) and pcode:
             checks_run += 1
             opcodes = [str(item.get("opcode", "")).upper() for item in pcode if isinstance(item, dict)]
-            ir_calls = sum(op in {"CALL", "CALLIND"} for op in opcodes)
-            if ir_calls - source_call_count >= call_count_tolerance:
-                message = (
-                    f"P-code call mismatch: normalized IR has {ir_calls} calls, candidate has {source_call_count}"
-                )
-                (uncertainties if expanded else findings).append(message)
+            ir_calls = pcode_call_evidence(pcode)
+            check_calls(
+                ir_calls, "P-code",
+                f"P-code call mismatch: normalized IR has {ir_calls.raw_count} calls, "
+                f"candidate has {source_call_count}",
+                lowering=ir_calls.count("ordinary") if expanded else 0, library_expansion=expanded,
+            )
             ir_returns = sum(op == "RETURN" for op in opcodes)
             source_returns = source_body.count("return")
             if ir_returns >= 2 and source_returns == 0:
@@ -189,22 +221,26 @@ def verify_candidate(
                     f"P-code return mismatch: normalized IR has {ir_returns} returns, candidate has no explicit return"
                 )
 
-    if uncertainties:
-        missing_calls = named_calls(decompile_body) - named_calls(source_body)
+    if uncertainties or call_notes:
+        missing_calls = named_calls(mask_nonordinary_calls(decompile_body)) - named_calls(
+            mask_nonordinary_calls(source_body)
+        )
         if missing_calls:
-            findings.append("Named calls missing outside library normalization: " + ", ".join(sorted(missing_calls)))
+            findings.append("Named calls missing outside library normalization: " + ", ".join(
+                f"{name} ({count} occurrence(s))" for name, count in sorted(missing_calls.items())
+            ))
 
     if findings:
         return ObjectiveVerdict(
             verdict=Verdict.FAIL,
             summary="Objective verifier found structural mismatches",
-            findings=[*findings, *uncertainties, *(region_notes if uncertainties else [])],
+            findings=[*findings, *uncertainties, *call_notes, *(region_notes if uncertainties else [])],
         )
     if uncertainties:
         return ObjectiveVerdict(
             verdict=Verdict.UNKNOWN,
-            summary="Inline library expansion prevents independent aggregate count comparison",
-            findings=[*uncertainties, *region_notes],
+            summary="Call evidence or compiler expansion prevents independent structural comparison",
+            findings=[*uncertainties, *call_notes, *region_notes],
         )
     if checks_run == 0:
         return ObjectiveVerdict(
@@ -215,7 +251,7 @@ def verify_candidate(
     return ObjectiveVerdict(
         verdict=Verdict.PASS,
         summary="No structural mismatches found",
-        findings=[],
+        findings=call_notes,
     )
 
 

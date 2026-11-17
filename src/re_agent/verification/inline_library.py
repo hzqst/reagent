@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from re_agent.utils.call_evidence import asm_call_evidence
 from re_agent.utils.text import CPP_KEYWORDS, TOKEN_CALL_RE, mask_non_code
 
 _STORAGE = re.compile(
@@ -299,6 +300,8 @@ def mask_regions(decompiled: str, regions: list[InlineRegion]) -> str:
 
 def mechanical_call(line: str, *, include_sort: bool = False) -> bool:
     """Known direct lowering/library calls only; never match arbitrary substrings."""
+    if asm_call_evidence(line, 1).count("lifetime"):
+        return True
     instruction = line.split(";", 1)[0]
     if include_sort and re.match(
         r"\s*(?:(?:0x)?[0-9a-fA-F]+:?\s+)?(?i:call)\s+"
@@ -311,7 +314,6 @@ def mechanical_call(line: str, *, include_sort: bool = False) -> bool:
     return bool(re.match(
         r"\s*(?:(?:0x)?[0-9a-fA-F]+:?\s+)?(?i:call)\s+(?:(?i:[a-z]+ ptr)\s+)?"
         r"(?:_?(?:memmove|memcpy|memset)(?:@\w+)?|(?:std::)?__throw_bad_alloc|"
-        r"(?:std::)?operator (?:new|delete)(?:\[\])?|"
-        r"_Z(?:nw|na|dl|da)\w*|std::vector<[^;\n]*>::_M_insert_aux)"
+        r"std::vector<[^;\n]*>::_M_insert_aux)"
         r"(?:\s*\(|\s*$)", instruction,
     ))

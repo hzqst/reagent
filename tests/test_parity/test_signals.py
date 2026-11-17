@@ -92,16 +92,16 @@ def test_fp_sensitivity() -> None:
 
 
 def test_call_count_mismatch() -> None:
-    src = _make_source(call_count=2)
-    ghidra = _make_ghidra(asm_call_count=8)
+    src = _make_source(call_count=2, body_no_comments="{foo(); foo();}")
+    ghidra = _make_ghidra(asm_call_count=8, asm_instructions="100 call foo\n" * 8)
     f = check_call_count_mismatch(source=src, ghidra=ghidra, call_count_warn_diff=3)
     assert f is not None
     assert f.level == "yellow"
 
 
 def test_call_count_within_threshold() -> None:
-    src = _make_source(call_count=5)
-    ghidra = _make_ghidra(asm_call_count=7)
+    src = _make_source(call_count=5, body_no_comments="{" + "foo();" * 5 + "}")
+    ghidra = _make_ghidra(asm_call_count=7, asm_instructions="100 call foo\n" * 7)
     f = check_call_count_mismatch(source=src, ghidra=ghidra, call_count_warn_diff=3)
     assert f is None
 

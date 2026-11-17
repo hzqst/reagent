@@ -473,6 +473,21 @@ with available decompile, assembly, CFG, and normalized high P-code evidence.
 It returns `FAIL` only for strong mismatches; insufficient evidence returns
 `UNKNOWN`.
 
+Call checks preserve raw backend totals and classify individual call sites using
+the same rules for decompiled code, assembly, P-code, and parity. Exact
+`__x86.get_pc_thunk.*` / `__i686.get_pc_thunk.*` targets are PIC setup, not
+source calls. Recognized global `operator new` / `operator delete` variants
+(including sized, array, and mangled forms) are lifetime evidence: they are
+recorded with their locations but do not have a fixed source-call multiplicity.
+They leave the comparison `UNKNOWN` unless independent evidence establishes
+`FAIL`. Indirect/unnamed targets and incomplete call-site parsing also leave
+aggregate comparison inconclusive. Callee-list totals are not call-site counts
+and cannot independently establish a failure. Diagnostics retain raw totals,
+categories, and reasons; repeated ordinary calls remain separate occurrences.
+GOT operands, comments, and whole `__cxa_*` / `_Unwind_*` symbol families are
+not exempt. Parity reports inconclusive call comparisons as INFO, including
+legacy snapshots that provide only totals; comparable deficits still warn.
+
 Inlined libstdc++ vector operations can introduce allocator calls and control
 flow absent from the original source operation. The objective verifier identifies
 bounded storage-only statements in backend decompilation and retains their text
@@ -525,9 +540,9 @@ The 11 built-in signals are:
 | Large ASM, tiny source | RED | Large disassembly with a very small source body |
 | Plugin-call heavy | YELLOW | Plugin calls dominate the source body |
 | Short body | YELLOW | Body has fewer than six lines |
-| Low call count | YELLOW | Decompiled callees greatly exceed source calls |
+| Low call count | YELLOW / INFO | Retained decompiled calls greatly exceed source calls; callee totals alone are inconclusive |
 | FP sensitivity | YELLOW | Assembly has FP-sensitive operations but source has no math tokens |
-| Call-count mismatch | YELLOW | Source and assembly call counts differ beyond the configured threshold |
+| Call-count mismatch | YELLOW / INFO | Comparable source and assembly call counts differ beyond the threshold; unresolved lowering is inconclusive |
 | NaN logic | YELLOW | Decompile indicates NaN-sensitive behavior missing from source |
 | Inline wrapper | INFO | Source forwards to an internal implementation |
 

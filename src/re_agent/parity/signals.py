@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from re_agent.core.models import Finding, GhidraData, SourceMatch
+from re_agent.utils.call_evidence import asm_call_evidence, code_call_evidence
+from re_agent.utils.text import mask_non_code
 
 SignalFn = Callable[..., Finding | None]
 
@@ -86,10 +88,22 @@ def check_low_call_count(
 ) -> Finding | None:
     if source is None or ghidra is None or not ghidra.decompile_ok or inline_skip:
         return None
-    if ghidra.callees is not None and ghidra.callees >= 6 and source.call_count <= 1:
+    source_calls = code_call_evidence(source.body_no_comments).count("ordinary")
+    if ghidra.decompiled is not None:
+        # Exclude the function declaration, which is not a call occurrence.
+        body = mask_non_code(ghidra.decompiled).partition("{")[2]
+        calls = code_call_evidence(body)
+        if calls.count("ordinary") >= 6 and source_calls <= 1:
+            return Finding(
+                level="yellow",
+                reason=f"Source call count is very low ({source_calls}) vs decompiled ordinary calls "
+                       f"({calls.count('ordinary')}); {calls.describe()}",
+            )
+    if ghidra.callees is not None and ghidra.callees >= 6 and source_calls <= 1:
         return Finding(
-            level="yellow",
-            reason=f"Source call count is very low ({source.call_count}) vs Ghidra callees ({ghidra.callees})",
+            level="info",
+            reason=f"Backend reports {ghidra.callees} callees vs {source_calls} source calls; "
+                   "callee totals and source call sites are not directly comparable",
         )
     return None
 
@@ -119,13 +133,22 @@ def check_call_count_mismatch(
 ) -> Finding | None:
     if source is None or ghidra is None or not ghidra.asm_ok or inline_skip:
         return None
-    call_diff = abs(ghidra.asm_call_count - source.call_count)
+    source_calls = code_call_evidence(source.body_no_comments).count("ordinary")
+    if ghidra.asm_instructions is None:
+        if abs(ghidra.asm_call_count - source_calls) > call_count_warn_diff:
+            return Finding(level="info", reason="Raw ASM call total has no call-site details for comparison")
+        return None
+    calls = asm_call_evidence(ghidra.asm_instructions, ghidra.asm_call_count)
+    call_diff = abs(calls.count("ordinary") - source_calls)
+    definite_deficit = calls.complete and calls.count("ordinary") - source_calls > call_count_warn_diff
+    if not calls.comparable and not definite_deficit:
+        return Finding(level="info", reason=f"Call count comparison is inconclusive: {calls.describe()}")
     if call_diff > call_count_warn_diff:
         return Finding(
             level="yellow",
             reason=(
                 f"Call count mismatch: vanilla has {ghidra.asm_call_count} calls, "
-                f"source has {source.call_count} calls (diff: {call_diff})"
+                f"source has {source_calls} ordinary calls (normalized diff: {call_diff}); {calls.describe()}"
             ),
         )
     return None

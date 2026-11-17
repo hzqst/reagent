@@ -402,6 +402,8 @@ class GhidraData:
     refs_global_rw_count: int = 0
     used_containing_fallback: bool = False
     resolved_address: str | None = None
+    decompiled: str | None = None
+    asm_instructions: str | None = None
 
 
 # ---------------------------------------------------------------------------
