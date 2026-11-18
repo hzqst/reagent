@@ -12,6 +12,7 @@ from re_agent.core.models import FunctionTarget, ObjectiveVerdict, Verdict
 from re_agent.utils.call_evidence import (
     CallEvidence,
     asm_call_evidence,
+    bind_indirect_sites,
     code_call_evidence,
     mask_nonordinary_calls,
     pcode_call_evidence,
@@ -65,6 +66,7 @@ def verify_candidate(
     # Fixed-trip loops can explain exact per-callee unrolling, never a deficit.
     loops = fixed_trip_loops(raw_source_body)
     source_callees = call_counter(source_calls)
+    machine_calls: list[CallEvidence] = []
 
     findings: list[str] = []
     uncertainties: list[str] = []
@@ -82,14 +84,14 @@ def verify_candidate(
         return credit
 
     def check_calls(evidence: CallEvidence, origin: str, message: str, *, lowering: int = 0,
-                    library_expansion: bool = False) -> None:
+                    library_expansion: bool = False, uncertain_aliases: int = 0) -> None:
         if evidence.count("pic") or evidence.count("decompiler_expr") or not evidence.comparable:
             call_notes.extend(evidence.diagnostics(origin))
         if not evidence.comparable:
             uncertainties.append(f"{origin} call comparison is inconclusive: {evidence.describe()}")
         # Direct retained calls provide a lower bound. Unknown/implicit calls
         # cannot increase the source's budget or hide an independent deficit.
-        deficit = evidence.count("ordinary") - source_call_count
+        deficit = evidence.count("ordinary") - uncertain_aliases - source_call_count
         if evidence.complete and deficit >= call_count_tolerance and deficit > 0:
             unrolled = sum(unrolled_credit(evidence, origin).values())
             if unrolled and deficit - unrolled < call_count_tolerance:
@@ -114,9 +116,9 @@ def verify_candidate(
 
     # raw_output may be a JSON envelope, with escaped code and ref metadata.
     # Mask before slicing so braces in literals cannot select a false body.
-    decompile_body = _extract_body(mask_non_code(decompile.decompiled))
+    masked_decompile = mask_non_code(decompile.decompiled)
+    decompile_body = _extract_body(masked_decompile)
     decompile_calls = code_call_evidence(decompile_body, decompiled=True)
-    decompile_unrolled = unrolled_call_credit(loops, source_callees, call_counter(decompile_calls))
     # Read only backend evidence here. Candidate address comments and checker
     # verdicts never authorize an exception to the independent verifier.
     vector_expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
@@ -153,15 +155,6 @@ def verify_candidate(
             findings.append("Constant return value differs from decompiled evidence")
     decompile_flow_count = count_control_flow(decompile_body)
     zero_fill_expanded = has_zero_fill_expansion(decompile_body)
-    if "{" in decompile_body and decompile_calls.raw_count:
-        checks_run += 1
-        check_calls(
-            decompile_calls, "Decompile",
-            f"Decompiled call mismatch: decompiled body has {decompile_calls.count('ordinary')} ordinary call sites "
-            f"(raw lexical sites {decompile_calls.raw_count}), "
-            f"candidate has {source_call_count} calls",
-            library_expansion=expanded,
-        )
     if decompile.callees is not None:
         checks_run += 1
         if decompile.callees - source_call_count >= call_count_tolerance and decompile.callees > source_call_count:
@@ -172,25 +165,6 @@ def verify_candidate(
                 "callee totals and source call sites are not directly comparable"
             )
 
-    if decompile_flow_count >= 2:
-        checks_run += 1
-        flow_diff = decompile_flow_count - source_flow_count
-        if flow_diff >= control_flow_tolerance and source_flow_count < decompile_flow_count:
-            message = (
-                f"Control-flow mismatch: decompile has {decompile_flow_count} lexical control-flow tokens, "
-                f"candidate has {source_flow_count}"
-            )
-            residual_count = count_control_flow(residual)
-            flow_budget = unrolled_flow_budget(loops, decompile_unrolled, zero_fill_expanded)
-            if flow_budget and flow_diff - flow_budget < control_flow_tolerance:
-                uncertainties.append(f"{message}; fixed-trip loop unrolling and tail zero fill account for up to "
-                                     f"{flow_budget} branches")
-            elif expanded and (incomplete_expansion or residual_count - source_flow_count < control_flow_tolerance):
-                uncertainties.append(f"{message}; bounded normalization leaves {residual_count}; "
-                                     "remaining compiler expansion is not a comparable source count")
-            else:
-                uncertainties.append(f"{message}; equivalent control-flow restructuring can change lexical counts")
-
     if backend.capabilities.has_asm:
         try:
             asm = backend.get_asm(target.address)
@@ -199,6 +173,7 @@ def verify_candidate(
         if asm is not None:
             checks_run += 1
             asm_calls = asm_call_evidence(asm.instructions, asm.call_count)
+            machine_calls.append(asm_calls)
             mechanical = sum(
                 site.kind == "ordinary" and mechanical_call(f"call {site.target}", include_sort=sort_expanded)
                 for site in asm_calls.sites
@@ -243,6 +218,7 @@ def verify_candidate(
             checks_run += 1
             opcodes = [str(item.get("opcode", "")).upper() for item in pcode if isinstance(item, dict)]
             ir_calls = pcode_call_evidence(pcode)
+            machine_calls.append(ir_calls)
             check_calls(
                 ir_calls, "P-code",
                 f"P-code call mismatch: normalized IR has {ir_calls.raw_count} calls, "
@@ -256,18 +232,88 @@ def verify_candidate(
                     f"P-code return mismatch: normalized IR has {ir_returns} returns, candidate has no explicit return"
                 )
 
+    # A bare name in pseudocode can denote a callback-table slot. A new
+    # member spelling makes identity uncertain, but cannot establish a mapping.
+    machine_callees: Counter[str] = Counter()
+    for evidence in machine_calls:
+        # A scoped C++ method with the same basename cannot establish the
+        # identity of a bare data object. Preserve scope and leading underscores.
+        direct_names: Counter[str] = Counter()
+        for site in evidence.sites:
+            if site.kind == "ordinary":
+                annotated = re.fullmatch(r"(?:0x)?[\da-fA-F]+\s+<([^<>]+)>", site.target)
+                symbol = annotated[1] if annotated else site.target
+                direct_names[symbol.partition("(")[0].removesuffix("@plt")] += 1
+        machine_callees |= direct_names
+    # Comment masking preserves offsets. Only the backend's original text can
+    # supply the statement addresses corresponding to its machine evidence.
+    body_start = masked_decompile.find(decompile_body)
+    raw_body = decompile.decompiled[body_start:body_start + len(decompile_body)]
+    decompile_calls = bind_indirect_sites(raw_body, decompile_calls, machine_calls)
+    decompile_unrolled = unrolled_call_credit(loops, source_callees, call_counter(decompile_calls))
+    member_sites = Counter(
+        site.target for site in source_calls.sites
+        if site.kind == "ordinary" and source_body[:site.start].rstrip().endswith((".", "->"))
+    )
+    decompiled_names = Counter(site.target for site in decompile_calls.sites if site.kind == "ordinary")
+    new_members = member_sites - decompiled_names
+    possible_aliases: Counter[str] = Counter()
+    if new_members:
+        source_names = Counter(site.target for site in source_calls.sites if site.kind == "ordinary")
+        bare_names = Counter(
+            site.target for site in decompile_calls.sites if site.kind == "ordinary"
+            and re.fullmatch(r"\w+", site.target) and not decompile_body[:site.start].rstrip().endswith((".", "->"))
+        )
+        for name, occurrences in bare_names.items():
+            unmatched = occurrences - max(source_names[name], machine_callees[name])
+            if unmatched > 0:
+                possible_aliases[name] = min(unmatched, new_members.total())
+                locations = ", ".join(site.location for site in decompile_calls.sites if site.target == name)
+                uncertainties.append(f"Unresolved call identity: {name} at {locations}; "
+                                     f"no verified mapping to candidate member calls ({decompile_calls.raw_count} "
+                                     f"raw decompile sites, {source_calls.raw_count} raw candidate sites)")
+
+    if "{" in decompile_body and decompile_calls.raw_count:
+        checks_run += 1
+        check_calls(
+            decompile_calls, "Decompile",
+            f"Decompiled call mismatch: decompiled body has {decompile_calls.count('ordinary')} ordinary call sites "
+            f"(raw lexical sites {decompile_calls.raw_count}), candidate has {source_call_count} calls",
+            library_expansion=expanded,
+            uncertain_aliases=min(possible_aliases.total(), new_members.total()),
+        )
+
+    if decompile_flow_count >= 2:
+        checks_run += 1
+        flow_diff = decompile_flow_count - source_flow_count
+        if flow_diff >= control_flow_tolerance and source_flow_count < decompile_flow_count:
+            message = (
+                f"Control-flow mismatch: decompile has {decompile_flow_count} lexical control-flow tokens, "
+                f"candidate has {source_flow_count}"
+            )
+            residual_count = count_control_flow(residual)
+            flow_budget = unrolled_flow_budget(loops, decompile_unrolled, zero_fill_expanded)
+            if flow_budget and flow_diff - flow_budget < control_flow_tolerance:
+                uncertainties.append(f"{message}; fixed-trip loop unrolling and tail zero fill account for up to "
+                                     f"{flow_budget} branches")
+            elif expanded and (incomplete_expansion or residual_count - source_flow_count < control_flow_tolerance):
+                uncertainties.append(f"{message}; bounded normalization leaves {residual_count}; "
+                                     "remaining compiler expansion is not a comparable source count")
+            else:
+                uncertainties.append(f"{message}; equivalent control-flow restructuring can change lexical counts")
+
     if unrolling_notes and zero_fill_expanded and not has_zero_write(raw_source_body):
         findings.append("Zero-fill mismatch: decompiled body stores expanded zero padding, "
                         "candidate writes no zero padding")
 
-    if uncertainties or call_notes:
-        missing_calls = named_calls(mask_nonordinary_calls(decompile_body, decompiled=True)) - named_calls(
+    if uncertainties or call_notes or new_members:
+        missing_calls = named_calls(mask_nonordinary_calls(decompile_body, evidence=decompile_calls)) - named_calls(
             mask_nonordinary_calls(source_body), decompiled=False,
         )
         for name in list(missing_calls):
             # Exactly matched unrolled steps are not missing source calls.
             missing_calls[name] -= decompile_unrolled[callee_key(name)]
-        missing_calls = +missing_calls
+        missing_calls -= possible_aliases
         if missing_calls:
             findings.append("Named calls missing outside library normalization: " + ", ".join(
                 f"{name} ({count} occurrence(s))" for name, count in sorted(missing_calls.items())
