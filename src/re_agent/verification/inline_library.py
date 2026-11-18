@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from re_agent.utils.call_evidence import asm_call_evidence, is_decompiler_expression
-from re_agent.utils.text import CPP_KEYWORDS, TOKEN_CALL_RE, mask_non_code
+from re_agent.utils.text import CPP_KEYWORDS, TOKEN_CALL_RE, call_tokens, mask_non_code
 
 _STORAGE = re.compile(
     r"\b(?:[A-Za-z_]\w*(?:->|\.))*[A-Za-z_]\w*"
@@ -273,7 +273,7 @@ def named_calls(code: str, *, decompiled: bool = True) -> Counter[str]:
     code = mask_non_code(code)
     return Counter(
         call[1].split("::")[-1]
-        for call in TOKEN_CALL_RE.finditer(code)
+        for call in call_tokens(code)
         if call[1] not in CPP_KEYWORDS and call[1].split("::")[-1] not in _LIBRARY_CALLS
         and code[max(0, call.start() - 1):call.start()] != "~"
         and call[1] not in _TYPE_WORDS and not call[1].endswith(":")

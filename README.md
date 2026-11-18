@@ -532,6 +532,19 @@ scan intrinsics are expressions, not missing named source calls. Other named
 business calls still require matching occurrences; absence of a matching name
 in assembly text alone never authorizes ignoring a call.
 
+Fully unrolled fixed-trip loops are handled the same way. A non-nested candidate
+loop qualifies when its bound is a literal or a `const`/`constexpr` integer in
+the function body. Its extra call sites are credited only for callees whose
+decompiled, assembly or P-code count equals the trip count times the loop's
+sites exactly. A wrong bound, a removed call, partial unrolling, or another
+deficit gets no credit. Branches inside the loop body, including exits that the
+compiler turns into one `goto` per step, may repeat once per trip. A tail fill
+loop may add one branch per trip, but only when the backend shows expanded
+zero stores. Once unrolling is credited, backend zero padding still requires a
+zero write in the candidate. Counts explained this way return `UNKNOWN` with the
+raw totals. Parenthesized callees such as `(::tolower)(c)` count as calls;
+cast-like names such as `(size_t)(n)` do not.
+
 IDA assembly call counts use `CALL` instruction sites, including indirect calls
 and repeated calls to the same target. Text listings and structured instruction
 rows are supported. Unsupported row formats and responses with more instruction
