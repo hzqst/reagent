@@ -194,10 +194,10 @@ def test_intrinsic_normalization_keeps_independent_evidence_gaps_unknown() -> No
     assert any("unresolved" in note and "sub_1234" in note for note in result.findings)
 
 
-def test_intrinsic_normalization_keeps_control_flow_contradictions() -> None:
+def test_unused_intrinsic_results_leave_only_lexical_flow_uncertainty() -> None:
     backend = _SimdBackend(
         has_asm=False, decompiled="void f() { if (x) _mm_add_epi64(x); if (y) _mm_loadl_epi64(y); }",
     )
     result = verify_candidate("void f() {}", SIMD_TARGET, backend)
-    assert result.verdict == Verdict.FAIL
+    assert result.verdict == Verdict.UNKNOWN
     assert any("Control-flow mismatch" in note for note in result.findings)

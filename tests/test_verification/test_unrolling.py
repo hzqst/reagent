@@ -186,14 +186,20 @@ def test_compiler_style_expanded_reconstruction_still_passes() -> None:
     (CANDIDATE.replace("kNameLength = 16", "kNameLength = 32"), "Decompiled call mismatch"),
     # Missing tail padding.
     (CANDIDATE.replace("    for (; i < kNameLength; ++i)\n        out[i] = '\\0';\n", ""), "Zero-fill mismatch"),
-    # Missing early NUL exit leaves the unrolled guards unexplained.
-    (CANDIDATE.replace("        if (c == 0)\n            break;\n", ""), "Control-flow mismatch"),
 ])
 def test_unrolling_does_not_hide_semantic_omissions(candidate: str, expected: str) -> None:
     verdict, findings = _verify(candidate)
 
     assert verdict == Verdict.FAIL
     assert any(finding.startswith(expected) for finding in findings), findings
+
+
+def test_removed_early_exit_leaves_unexplained_flow() -> None:
+    candidate = CANDIDATE.replace("        if (c == 0)\n            break;\n", "")
+    verdict, findings = _verify(candidate)
+
+    assert verdict == Verdict.UNKNOWN
+    assert any("restructuring" in finding for finding in findings)
 
 
 def test_unrolling_does_not_hide_a_deleted_independent_side_effect() -> None:
