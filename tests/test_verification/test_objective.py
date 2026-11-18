@@ -100,10 +100,11 @@ def test_cfg_still_rejects_removed_branching_without_decompiler_support() -> Non
     assert any("CFG mismatch" in finding for finding in result.findings)
 
 
-def test_removed_branches_still_fail_decompile_check() -> None:
+def test_cfg_contradiction_dominates_lexical_uncertainty() -> None:
     result = verify_candidate("int f(int x) { return 0; }", FunctionTarget("100", "", "f"),
                               _CFGBackend(EARLY_RETURN_SOURCE, EARLY_RETURN_CFG))  # type: ignore[arg-type]
     assert result.verdict == Verdict.FAIL
+    assert any("CFG mismatch" in finding for finding in result.findings)
     assert any("Control-flow mismatch" in finding for finding in result.findings)
 
 
@@ -146,7 +147,7 @@ def test_ida_static_guard_still_rejects_removed_decisions(monkeypatch) -> None:
     _backend(monkeypatch, _plain_decompile(STATIC_GUARD_SOURCE))
     result = verify_candidate("int f() { return map; }", FunctionTarget("0x1", "", "f"), IdaMcpBackend())
     assert result.verdict == Verdict.FAIL
-    assert "Control-flow mismatch: decompile has 2 branches/loops, candidate has 0" in result.findings
+    assert any("Decompiled call mismatch" in finding for finding in result.findings)
 
 
 def test_objective_ignores_json_metadata_when_counting_decompiled_code(monkeypatch) -> None:
@@ -211,3 +212,31 @@ def test_literal_comment_markers_do_not_hide_real_source_branches(monkeypatch) -
     result = verify_candidate(source, FunctionTarget("0x1", "", "f"), IdaMcpBackend(),
                               control_flow_tolerance=1)
     assert result.verdict == Verdict.PASS
+
+
+GOTO_BODY = "if (x == 0) goto A; if (x == 1) goto B; return 30; A: return 10; B: return 20;"
+EARLY_RETURN_BODY = "if (x == 0) return 10; if (x == 1) return 20; return 30;"
+
+
+@pytest.mark.parametrize("decompiled,candidate,counts", [
+    (GOTO_BODY, EARLY_RETURN_BODY, (4, 2)),
+    ("int i = 0; do { ++i; } while (i < 3); do { --i; } while (i > 0); return i;",
+     "int i = 0; while (i < 3) { ++i; } while (i > 0) { --i; } return i;", (4, 2)),
+    ("if (x == 0) return 10; if (x == 1) return 20; if (x == 2) return 30; return 40;",
+     "switch (x) { case 0: return 10; case 1: return 20; case 2: return 30; default: return 40; }", (3, 1)),
+], ids=["goto-to-return", "do-while-to-while", "if-tree-to-switch"])
+def test_lexical_flow_deficit_is_inconclusive(decompiled: str, candidate: str, counts: tuple[int, int]) -> None:
+    backend = _CFGBackend("int f(int x) {" + decompiled + "}", [])
+    result = verify_candidate("int f(int x) {" + candidate + "}", FunctionTarget("100", "", "f"), backend)
+
+    assert result.verdict == Verdict.UNKNOWN
+    assert any(f"decompile has {counts[0]} lexical control-flow tokens, candidate has {counts[1]}" in finding
+               and "restructuring" in finding for finding in result.findings)
+
+
+def test_lexical_flow_uncertainty_does_not_hide_missing_call() -> None:
+    backend = _CFGBackend("int f(int x) { notify();" + GOTO_BODY + "}", [])
+    result = verify_candidate("int f(int x) {" + EARLY_RETURN_BODY + "}", FunctionTarget("100", "", "f"), backend)
+
+    assert result.verdict == Verdict.FAIL
+    assert any("notify (1 occurrence(s))" in finding for finding in result.findings)

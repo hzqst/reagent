@@ -177,7 +177,7 @@ def verify_candidate(
         flow_diff = decompile_flow_count - source_flow_count
         if flow_diff >= control_flow_tolerance and source_flow_count < decompile_flow_count:
             message = (
-                f"Control-flow mismatch: decompile has {decompile_flow_count} branches/loops, "
+                f"Control-flow mismatch: decompile has {decompile_flow_count} lexical control-flow tokens, "
                 f"candidate has {source_flow_count}"
             )
             residual_count = count_control_flow(residual)
@@ -189,7 +189,7 @@ def verify_candidate(
                 uncertainties.append(f"{message}; bounded normalization leaves {residual_count}; "
                                      "remaining compiler expansion is not a comparable source count")
             else:
-                findings.append(message)
+                uncertainties.append(f"{message}; equivalent control-flow restructuring can change lexical counts")
 
     if backend.capabilities.has_asm:
         try:
@@ -283,7 +283,7 @@ def verify_candidate(
     if uncertainties:
         return ObjectiveVerdict(
             verdict=Verdict.UNKNOWN,
-            summary="Call evidence or compiler expansion prevents independent structural comparison",
+            summary="Structural comparison is inconclusive",
             findings=[*uncertainties, *call_notes, *unrolling_notes, *region_notes],
         )
     if checks_run == 0:

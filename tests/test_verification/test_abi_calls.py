@@ -81,10 +81,10 @@ def test_delete_keyword_or_comment_cannot_prove_lifetime_equivalence() -> None:
     assert result.verdict == Verdict.UNKNOWN
 
 
-def test_lifetime_uncertainty_does_not_hide_business_branch_removal() -> None:
+def test_guard_removal_without_independent_evidence_is_inconclusive() -> None:
     candidate = CANDIDATE.replace("if (bad) ", "").replace("if (other) ", "")
     result = verify_candidate(candidate, TARGET, _ABIBackend())
-    assert result.verdict == Verdict.FAIL
+    assert result.verdict == Verdict.UNKNOWN
     assert any("Control-flow mismatch" in f for f in result.findings)
 
 
