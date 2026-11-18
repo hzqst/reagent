@@ -10,6 +10,15 @@ import re
 COMMENT_BLOCK_RE: re.Pattern[str] = re.compile(r"/\*.*?\*/", re.S)
 COMMENT_LINE_RE: re.Pattern[str] = re.compile(r"//.*")
 TOKEN_CALL_RE: re.Pattern[str] = re.compile(r"\b([A-Za-z_][A-Za-z0-9_:]*)\s*\(")
+# ``(::tolower)(c)`` suppresses a function-like macro but still calls the name.
+# A preceding name, ``)``, ``]`` or ``>`` means the parentheses are arguments instead.
+PAREN_CALL_RE: re.Pattern[str] = re.compile(r"(?<![\w)\]>])\(\s*(?:::\s*)?([A-Za-z_][A-Za-z0-9_:]*)\s*\)(?=\s*\()")
+# Casts look like parenthesized callees: ``(int)(x)``, ``(size_t)(n)``, ``(DWORD)(v)``,
+# and Hex-Rays ``(_BYTE)(v)`` / ``(__int8)(v)``.
+_CAST_NAME_RE: re.Pattern[str] = re.compile(
+    r"(?:void|char|short|int|long|float|double|bool|signed|unsigned|auto|\w*_t|_*[A-Z][A-Z0-9_]*|__int\d+)"
+)
+_PAREN_CONDITION_RE: re.Pattern[str] = re.compile(r"\b(?:if|while|for|switch|sizeof|alignof|decltype)\s*$")
 CONTROL_FLOW_RE: re.Pattern[str] = re.compile(r"\b(if|for|while|switch|do|goto)\b")
 CONDITIONAL_RE: re.Pattern[str] = re.compile(r"&&|\|\||\?")
 # Match complete tokens in source order: a quote inside a comment or an IDA
@@ -113,6 +122,20 @@ def mask_non_code(text: str) -> str:
     return _NON_CODE_RE.sub(mask, text)
 
 
+def call_tokens(code: str) -> list[re.Match[str]]:
+    """Return call-like name tokens in source order; group 1 is the callee.
+
+    Parenthesized callees are included unless the name is cast-like or the
+    parentheses are a condition such as ``if (flag)(void)f();``.
+    """
+    parenthesized = [
+        match for match in PAREN_CALL_RE.finditer(code)
+        if not _CAST_NAME_RE.fullmatch(match[1].split("::")[-1])
+        and not _PAREN_CONDITION_RE.search(code[:match.start()])
+    ]
+    return sorted([*TOKEN_CALL_RE.finditer(code), *parenthesized], key=lambda match: match.start())
+
+
 def count_calls(
     body_no_comments: str,
     stub_call_prefix: str = "plugin::Call",
@@ -129,7 +152,7 @@ def count_calls(
     total = 0
     plugin = 0
     non_plugin = 0
-    for m in TOKEN_CALL_RE.finditer(body_no_comments):
+    for m in call_tokens(body_no_comments):
         tok = m.group(1)
         if tok in CPP_KEYWORDS:
             continue

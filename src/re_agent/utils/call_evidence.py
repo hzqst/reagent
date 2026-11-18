@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from re_agent.utils.text import CPP_KEYWORDS, TOKEN_CALL_RE, mask_non_code
+from re_agent.utils.text import CPP_KEYWORDS, call_tokens, mask_non_code
 
 CallKind = Literal["ordinary", "pic", "lifetime", "unresolved", "decompiler_expr"]
 
@@ -133,7 +133,7 @@ def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
         sites.append(CallSite(f"text offset {match.start()}", target, kind, reason, match.start(), match.end()))
     for site in sites:
         masked = masked[:site.start] + " " * (site.end - site.start) + masked[site.end:]
-    for match in TOKEN_CALL_RE.finditer(masked):
+    for match in call_tokens(masked):
         target = match[1]
         if target in CPP_KEYWORDS or target == "operator" or target.endswith("::operator"):
             continue

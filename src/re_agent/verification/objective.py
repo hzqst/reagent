@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 
 from re_agent.backend.protocol import REBackend
 from re_agent.backend.stages import backend_task
@@ -29,6 +30,15 @@ from re_agent.verification.inline_library import (
     unresolved_vector_flow,
     vector_regions,
 )
+from re_agent.verification.unrolling import (
+    call_counter,
+    callee_key,
+    fixed_trip_loops,
+    has_zero_fill_expansion,
+    has_zero_write,
+    unrolled_call_credit,
+    unrolled_flow_budget,
+)
 
 
 @backend_task("objective")
@@ -47,14 +57,29 @@ def verify_candidate(
             findings=["Candidate code is empty"],
         )
 
-    source_body = mask_non_code(_extract_candidate_body(code, target))
-    source_call_count = code_call_evidence(source_body).count("ordinary")
+    raw_source_body = _extract_candidate_body(code, target)
+    source_body = mask_non_code(raw_source_body)
+    source_calls = code_call_evidence(source_body)
+    source_call_count = source_calls.count("ordinary")
     source_flow_count = count_control_flow(source_body)
+    # Fixed-trip loops can explain exact per-callee unrolling, never a deficit.
+    loops = fixed_trip_loops(raw_source_body)
+    source_callees = call_counter(source_calls)
 
     findings: list[str] = []
     uncertainties: list[str] = []
     call_notes: list[str] = []
+    unrolling_notes: list[str] = []
     checks_run = 0
+
+    def unrolled_credit(evidence: CallEvidence, origin: str) -> Counter[str]:
+        credit = unrolled_call_credit(loops, source_callees, call_counter(evidence))
+        if credit:
+            unrolling_notes.append(f"{origin}: fixed-trip loop unrolling matches " + ", ".join(
+                f"{name} ({source_callees[name]} source site(s) + {extra} unrolled)"
+                for name, extra in sorted(credit.items())
+            ))
+        return credit
 
     def check_calls(evidence: CallEvidence, origin: str, message: str, *, lowering: int = 0,
                     library_expansion: bool = False) -> None:
@@ -66,7 +91,10 @@ def verify_candidate(
         # cannot increase the source's budget or hide an independent deficit.
         deficit = evidence.count("ordinary") - source_call_count
         if evidence.complete and deficit >= call_count_tolerance and deficit > 0:
-            if library_expansion and deficit - lowering < call_count_tolerance:
+            unrolled = sum(unrolled_credit(evidence, origin).values())
+            if unrolled and deficit - unrolled < call_count_tolerance:
+                uncertainties.append(f"{message}; {unrolled} extra call sites match fixed-trip loop unrolling")
+            elif library_expansion and deficit - lowering < call_count_tolerance:
                 uncertainties.append(
                     f"{message}; {lowering} direct lowering/library calls make totals incomparable"
                 )
@@ -88,6 +116,7 @@ def verify_candidate(
     # Mask before slicing so braces in literals cannot select a false body.
     decompile_body = _extract_body(mask_non_code(decompile.decompiled))
     decompile_calls = code_call_evidence(decompile_body, decompiled=True)
+    decompile_unrolled = unrolled_call_credit(loops, source_callees, call_counter(decompile_calls))
     # Read only backend evidence here. Candidate address comments and checker
     # verdicts never authorize an exception to the independent verifier.
     vector_expanded = has_vector_expansion(decompile.decompiled) and has_container_abstraction(source_body)
@@ -123,6 +152,7 @@ def verify_candidate(
         if integer(expected_constant.group(1)) != integer(actual_constant.group(1)):
             findings.append("Constant return value differs from decompiled evidence")
     decompile_flow_count = count_control_flow(decompile_body)
+    zero_fill_expanded = has_zero_fill_expansion(decompile_body)
     if "{" in decompile_body and decompile_calls.raw_count:
         checks_run += 1
         check_calls(
@@ -151,7 +181,11 @@ def verify_candidate(
                 f"candidate has {source_flow_count}"
             )
             residual_count = count_control_flow(residual)
-            if expanded and (incomplete_expansion or residual_count - source_flow_count < control_flow_tolerance):
+            flow_budget = unrolled_flow_budget(loops, decompile_unrolled, zero_fill_expanded)
+            if flow_budget and flow_diff - flow_budget < control_flow_tolerance:
+                uncertainties.append(f"{message}; fixed-trip loop unrolling and tail zero fill account for up to "
+                                     f"{flow_budget} branches")
+            elif expanded and (incomplete_expansion or residual_count - source_flow_count < control_flow_tolerance):
                 uncertainties.append(f"{message}; bounded normalization leaves {residual_count}; "
                                      "remaining compiler expansion is not a comparable source count")
             else:
@@ -222,10 +256,18 @@ def verify_candidate(
                     f"P-code return mismatch: normalized IR has {ir_returns} returns, candidate has no explicit return"
                 )
 
+    if unrolling_notes and zero_fill_expanded and not has_zero_write(raw_source_body):
+        findings.append("Zero-fill mismatch: decompiled body stores expanded zero padding, "
+                        "candidate writes no zero padding")
+
     if uncertainties or call_notes:
         missing_calls = named_calls(mask_nonordinary_calls(decompile_body, decompiled=True)) - named_calls(
             mask_nonordinary_calls(source_body), decompiled=False,
         )
+        for name in list(missing_calls):
+            # Exactly matched unrolled steps are not missing source calls.
+            missing_calls[name] -= decompile_unrolled[callee_key(name)]
+        missing_calls = +missing_calls
         if missing_calls:
             findings.append("Named calls missing outside library normalization: " + ", ".join(
                 f"{name} ({count} occurrence(s))" for name, count in sorted(missing_calls.items())
@@ -235,13 +277,14 @@ def verify_candidate(
         return ObjectiveVerdict(
             verdict=Verdict.FAIL,
             summary="Objective verifier found structural mismatches",
-            findings=[*findings, *uncertainties, *call_notes, *(region_notes if uncertainties else [])],
+            findings=[*findings, *uncertainties, *call_notes, *unrolling_notes,
+                      *(region_notes if uncertainties else [])],
         )
     if uncertainties:
         return ObjectiveVerdict(
             verdict=Verdict.UNKNOWN,
             summary="Call evidence or compiler expansion prevents independent structural comparison",
-            findings=[*uncertainties, *call_notes, *region_notes],
+            findings=[*uncertainties, *call_notes, *unrolling_notes, *region_notes],
         )
     if checks_run == 0:
         return ObjectiveVerdict(
