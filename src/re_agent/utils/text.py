@@ -122,6 +122,21 @@ def mask_non_code(text: str) -> str:
     return _NON_CODE_RE.sub(mask, text)
 
 
+def _scoped_signature_ends(code: str) -> dict[int, int]:
+    """Map opening parentheses to the end of signatures followed by scope resolution."""
+    ends: dict[int, int] = {}
+    if "::" in code:
+        stack: list[int] = []
+        for token in re.finditer(r"\(|\)(?P<scope>\s*::)?", code):
+            if code[token.start()] == "(":
+                stack.append(token.start())
+            elif stack:
+                opening = stack.pop()
+                if token["scope"]:
+                    ends[opening] = token.end()
+    return ends
+
+
 def call_tokens(code: str) -> list[re.Match[str]]:
     """Return call-like name tokens in source order; group 1 is the callee.
 
@@ -133,7 +148,22 @@ def call_tokens(code: str) -> list[re.Match[str]]:
         if not _CAST_NAME_RE.fullmatch(match[1].split("::")[-1])
         and not _PAREN_CONDITION_RE.search(code[:match.start()])
     ]
-    return sorted([*TOKEN_CALL_RE.finditer(code), *parenthesized], key=lambda match: match.start())
+    tokens = sorted([*TOKEN_CALL_RE.finditer(code), *parenthesized], key=lambda match: match.start())
+    signature_ends = _scoped_signature_ends(code)
+    if not signature_ends:
+        return tokens
+    calls = []
+    skip_until = 0
+    for match in tokens:
+        if match.start() < skip_until:
+            continue
+        # Hex-Rays qualifies static locals as Function(parameter types)::variable.
+        # A control condition can also precede a global call: if (ready()) ::run().
+        if match.re is TOKEN_CALL_RE and match[1] not in CPP_KEYWORDS and match.end() - 1 in signature_ends:
+            skip_until = signature_ends[match.end() - 1]
+        else:
+            calls.append(match)
+    return calls
 
 
 def count_calls(
@@ -152,7 +182,7 @@ def count_calls(
     total = 0
     plugin = 0
     non_plugin = 0
-    for m in call_tokens(body_no_comments):
+    for m in call_tokens(mask_non_code(body_no_comments)):
         tok = m.group(1)
         if tok in CPP_KEYWORDS:
             continue

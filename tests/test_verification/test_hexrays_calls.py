@@ -11,6 +11,7 @@ from re_agent.core.models import AsmResult, DecompileResult, FunctionTarget, Ver
 from re_agent.parity.engine import fetch_ghidra_data
 from re_agent.parity.signals import check_low_call_count
 from re_agent.parity.source_indexer import SourceIndexer
+from re_agent.utils.call_evidence import code_call_evidence
 from re_agent.utils.text import count_calls
 from re_agent.verification.inline_library import named_calls
 from re_agent.verification.objective import verify_candidate
@@ -203,3 +204,27 @@ def test_unused_intrinsic_results_leave_only_lexical_flow_uncertainty() -> None:
     result = verify_candidate("void f() {}", SIMD_TARGET, backend)
     assert result.verdict == Verdict.UNKNOWN
     assert any("Control-flow mismatch" in note for note in result.findings)
+
+
+@pytest.mark.parametrize(("body", "expected"), [
+    ("++CL_CheckPredictionError(void)::pos;", {}),
+    ('Con_NPrintf((CL_CheckPredictionError()::pos & 3) + 10, "pred. error %.3f units", len);', {"Con_NPrintf": 1}),
+    ("ns::Player::Predict(int, void (*)(int)) /* scope */ ::pos++;", {}),
+    ("if (ready()) ::dispatch();", {"ready": 1, "dispatch": 1}),
+    ("Predict(Predict(int)::pos);", {"Predict": 1}),
+])
+def test_function_scoped_names_preserve_actual_calls(body: str, expected: dict[str, int]) -> None:
+    assert expected == named_calls(body)
+    assert sum(expected.values()) == count_calls(body)[0]
+    evidence = code_call_evidence(body, decompiled=True)
+    assert sum(expected.values()) == evidence.raw_count == evidence.count("ordinary")
+
+
+def test_objective_requires_only_actual_recursion() -> None:
+    backend = _HexRaysBackend(has_asm=False, decompiled="void Predict() { ++LODWORD(Predict(void)::pos); Predict(); }")
+    target = FunctionTarget("0x1", "", "Predict")
+    candidate = "void Predict() { static int pos; ++pos; Predict(); }"
+    assert verify_candidate(candidate, target, backend).verdict == Verdict.PASS
+    result = verify_candidate(candidate.replace(" Predict();", ""), target, backend)
+    assert result.verdict == Verdict.FAIL
+    assert any("Predict (1 occurrence(s))" in note for note in result.findings)
