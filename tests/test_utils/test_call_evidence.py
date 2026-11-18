@@ -49,7 +49,7 @@ def test_business_and_runtime_symbols_are_not_exempt(instruction: str) -> None:
 
 @pytest.mark.parametrize("target", [
     "eax", "[eax] ; operator delete(void *)", "dword ptr [ebx+_GLOBAL_OFFSET_TABLE_]",
-    "ds:callback", "0x1234", "sub_1234", "FUN_00001234",
+    "ds:callback", "0x1234", "sub_1234", "FUN_00001234", "unk_D8C44C",
 ])
 def test_indirect_or_unnamed_targets_are_unresolved(target: str) -> None:
     calls = asm_call_evidence(f"100 call {target}", 1)
@@ -61,6 +61,13 @@ def test_noncall_instructions_and_comments_cannot_inflate_sites() -> None:
     calls = asm_call_evidence("100 mov eax, call_counter ; call foo\n; call operator delete\n101 jmp foo", 0)
     assert calls.comparable
     assert calls.raw_count == 0
+
+
+def test_hex_rays_data_labels_require_an_exact_bare_backend_name() -> None:
+    code = "unk_ABCD(); unk_ABCD_handler(); api.unk_ABCD();"
+    assert code_call_evidence(code).count("ordinary") == 3
+    calls = code_call_evidence(code, decompiled=True)
+    assert [site.kind for site in calls.sites] == ["unresolved", "ordinary", "ordinary"]
 
 
 def test_partial_parsing_does_not_rewrite_the_raw_total() -> None:

@@ -7,7 +7,7 @@ unresolved targets prevent treating an aggregate machine count as a source count
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from re_agent.utils.text import CPP_KEYWORDS, call_tokens, mask_non_code
@@ -56,6 +56,7 @@ class CallSite:
     reason: str
     start: int = 0
     end: int = 0
+    indirect: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,7 +99,7 @@ def is_decompiler_expression(target: str) -> bool:
     )
 
 
-def classify_target(target: str) -> tuple[CallKind, str]:
+def classify_target(target: str, *, backend_symbol: bool = True) -> tuple[CallKind, str]:
     """Classify a resolved target, never symbol-like text in a comment."""
     name = target.strip()
     # objdump-style direct operands may carry both an address and a symbol.
@@ -109,6 +110,8 @@ def classify_target(target: str) -> tuple[CallKind, str]:
     if _PIC.fullmatch(name):
         return "pic", "exact PIC register-setup thunk"
     symbol = name.split("(", 1)[0].strip()
+    if backend_symbol and re.fullmatch(r"unk_[0-9a-fA-F]+", symbol):
+        return "unresolved", "backend data label has no resolved callee identity"
     if _ALLOCATION.fullmatch(symbol):
         return "lifetime", "allocation/deallocation lowering has no fixed source-call multiplicity"
     if (not re.fullmatch(r"[A-Za-z_$][\w:$@.~]*(?:\([^;\n]*\))?", name)
@@ -137,19 +140,55 @@ def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
         target = match[1]
         if target in CPP_KEYWORDS or target == "operator" or target.endswith("::operator"):
             continue
-        kind, reason = classify_target(target)
-        if (decompiled and is_decompiler_expression(target)
-                and not re.search(r"(?:\.|->|::)\s*$", masked[:match.start()])):
+        bare_decompiled = decompiled and not masked[:match.start()].rstrip().endswith((".", "->", "::"))
+        kind, reason = classify_target(target, backend_symbol=bare_decompiled)
+        if bare_decompiled and is_decompiler_expression(target):
             kind = "decompiler_expr"
             reason = "known Hex-Rays access/coercion or x86 intrinsic expression, not a source-call requirement"
         sites.append(CallSite(f"text offset {match.start()}", target, kind, reason, match.start(), match.end()))
     return CallEvidence(tuple(sorted(sites, key=lambda site: site.start)), len(sites))
 
 
-def mask_nonordinary_calls(code: str, *, decompiled: bool = False) -> str:
+def bind_indirect_sites(code: str, evidence: CallEvidence, machine_calls: list[CallEvidence]) -> CallEvidence:
+    """Associate an IDA statement address only with an unambiguous single-call statement."""
+    operands: dict[int, str] = {}
+    direct_addresses: set[int] = set()
+    for calls in machine_calls:
+        for site in calls.sites:
+            if re.fullmatch(r"(?:0x)?[\da-fA-F]+", site.location):
+                address_value = int(site.location, 16)
+                if site.indirect:
+                    operands.setdefault(address_value, site.target or "CALLIND")
+                elif site.kind == "ordinary":
+                    direct_addresses.add(address_value)
+    for address_value in direct_addresses:
+        operands.pop(address_value, None)
+    if not operands:
+        return evidence
+    sites = list(evidence.sites)
+    for i, site in enumerate(sites):
+        if site.kind not in {"ordinary", "unresolved"}:
+            continue
+        line_start = code.rfind("\n", 0, site.start) + 1
+        if code[line_start:site.start].strip() not in {"", "{"}:
+            continue
+        end = code.find("\n", site.end)
+        end = len(code) if end < 0 else end
+        if i + 1 < len(sites) and sites[i + 1].start < end:
+            continue
+        address = re.fullmatch(r"[^;]*\)\s*;\s*/\*\s*(0x[\da-fA-F]+)\s*\*/\s*}?[ \t]*", code[site.end:end])
+        if address and (operand := operands.get(int(address[1], 16))):
+            sites[i] = replace(site, kind="unresolved", location=f"{address[1]} ({site.location})",
+                               reason=f"indirect call through {operand}; callback identity unverified")
+    return CallEvidence(tuple(sites), evidence.raw_count)
+
+
+def mask_nonordinary_calls(code: str, *, decompiled: bool = False, evidence: CallEvidence | None = None) -> str:
     """Hide non-call/ABI/unknown names, preserving arguments and text offsets."""
     masked = mask_non_code(code)
-    for site in code_call_evidence(code, decompiled=decompiled).sites:
+    if evidence is None:
+        evidence = code_call_evidence(code, decompiled=decompiled)
+    for site in evidence.sites:
         if site.kind != "ordinary":
             masked = masked[:site.start] + re.sub(r"[^\n]", " ", masked[site.start:site.end]) + masked[site.end:]
     return masked
@@ -165,7 +204,8 @@ def asm_call_evidence(instructions: str, raw_count: int) -> CallEvidence:
         target = re.sub(r"^(?:(?:near|far|byte|word|dword|qword)\s+ptr\s+)", "", match["target"],
                         flags=re.IGNORECASE).strip()
         kind, reason = classify_target(target)
-        sites.append(CallSite(match["address"] or f"line {index + 1}", target, kind, reason))
+        indirect = kind == "unresolved" and ("[" in target or bool(_REGISTER.fullmatch(target)))
+        sites.append(CallSite(match["address"] or f"line {index + 1}", target, kind, reason, indirect=indirect))
     return CallEvidence(tuple(sites), raw_count)
 
 
@@ -179,5 +219,6 @@ def pcode_call_evidence(operations: list[dict[str, object]]) -> CallEvidence:
         target = operation.get("target")
         target = target if isinstance(target, str) else ""
         kind, reason = classify_target(target) if opcode == "CALL" else ("unresolved", "indirect P-code call")
-        sites.append(CallSite(str(operation.get("address", f"operation {index}")), target, kind, reason))
+        sites.append(CallSite(str(operation.get("address", f"operation {index}")), target, kind, reason,
+                              indirect=opcode == "CALLIND"))
     return CallEvidence(tuple(sites), len(sites))

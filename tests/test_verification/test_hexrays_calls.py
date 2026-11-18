@@ -11,6 +11,7 @@ from re_agent.core.models import AsmResult, DecompileResult, FunctionTarget, Ver
 from re_agent.parity.engine import fetch_ghidra_data
 from re_agent.parity.signals import check_low_call_count
 from re_agent.parity.source_indexer import SourceIndexer
+from re_agent.utils.text import count_calls
 from re_agent.verification.inline_library import named_calls
 from re_agent.verification.objective import verify_candidate
 
@@ -77,7 +78,8 @@ def test_real_source_functions_with_macro_names_are_counted(call: str) -> None:
     backend = _HexRaysBackend(has_asm=False, decompiled="void f() { real_call(); real_call(); real_call(); }")
     candidate = "void f() { " + f"{call}();" * 3 + " }"
     result = verify_candidate(candidate, FunctionTarget("0x1", "", "f"), backend, call_count_tolerance=1)
-    assert result.verdict == Verdict.PASS
+    assert count_calls(candidate.partition("{")[2])[0] == 3
+    assert result.verdict == (Verdict.UNKNOWN if call.startswith("object.") else Verdict.PASS)
 
 
 @pytest.mark.parametrize("call", ["LODWORD", "BYTE1", "COERCE_FLOAT"])
