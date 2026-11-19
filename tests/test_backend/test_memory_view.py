@@ -1,7 +1,10 @@
 """Tests for decoding a raw memory blob from the ``global`` tool."""
 from __future__ import annotations
 
+import json
 import struct
+
+import pytest
 
 from re_agent.backend.memory_view import describe_memory
 
@@ -45,6 +48,29 @@ def test_utf16_literal_is_reported() -> None:
     data = "%hs".encode("utf-16-le") + b"\x00\x00"
 
     assert describe_memory(data)["strings"]["utf16le"]["value"] == "%hs"
+
+
+@pytest.mark.parametrize(("label", "raw"), [
+    ("utf16le", "e0 d8 33 00 00 00"),
+    ("utf16le", "41 00 00 dc 00 00"),
+    ("utf16le", "41 00 42 00 00 d8"),
+    ("utf32le", "41 00 00 00 ff df 00 00 00 00 00 00"),
+    ("utf32le", "41 00 00 00 00 00 11 00 00 00 00 00"),
+])
+def test_malformed_wide_reading_keeps_raw_bytes(label: str, raw: str) -> None:
+    data = bytes.fromhex(raw)
+    artifact = describe_memory(data)
+    assert label not in artifact["strings"]
+    assert artifact["hex"] == " ".join(f"0x{byte:02x}" for byte in data)
+    json.dumps(artifact, ensure_ascii=False).encode("utf-8")
+
+
+def test_utf16_pair_counts_as_one_character_and_four_bytes() -> None:
+    artifact = describe_memory("A😀\0".encode("utf-16-le"))
+    assert artifact["strings"]["utf16le"] == {
+        "value": "A😀", "characters": 2, "byte_length": 6, "terminator_observed": True,
+    }
+    json.dumps(artifact, ensure_ascii=False).encode("utf-8")
 
 
 def test_scalar_reports_integer_and_float_views() -> None:

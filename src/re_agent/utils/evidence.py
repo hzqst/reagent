@@ -7,6 +7,8 @@ from typing import Any
 
 
 def bounded_evidence(content: str, max_chars: int = 8000) -> str:
+    # Backend strings may contain lone surrogates. Escape before measuring the prompt budget.
+    content = content.encode("utf-8", errors="backslashreplace").decode("utf-8")
     if len(content) <= max_chars:
         return content
     try:
