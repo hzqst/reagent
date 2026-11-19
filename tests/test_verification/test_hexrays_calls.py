@@ -228,3 +228,41 @@ def test_objective_requires_only_actual_recursion() -> None:
     result = verify_candidate(candidate.replace(" Predict();", ""), target, backend)
     assert result.verdict == Verdict.FAIL
     assert any("Predict (1 occurrence(s))" in note for note in result.findings)
+
+
+def test_pointer_declarations_do_not_require_calls_but_callback_does() -> None:
+    body = "".join(f"_DWORD (__cdecl *{name})(void *);\n" for name in "abc") + "callback();"
+    backend = _HexRaysBackend(has_asm=False, decompiled="void f() {" + body + "}")
+    calls = code_call_evidence(body, decompiled=True)
+    assert [site.target for site in calls.sites if site.kind == "ordinary"] == ["callback"]
+    assert all(body[site.start:site.end].startswith(site.target) for site in calls.sites)
+    target = FunctionTarget("0x1", "", "f")
+    assert verify_candidate("void f() { callback(); }", target, backend).verdict == Verdict.PASS
+    missing = verify_candidate("void f() {}", target, backend)
+    assert missing.verdict == Verdict.FAIL
+    assert any("callback (1 occurrence(s))" in note for note in missing.findings)
+
+
+@pytest.mark.parametrize("prefix", ["value = ", "return "])
+def test_cast_dispatch_preserves_nested_calls_and_reports_unknown_identity(prefix: str) -> None:
+    body = prefix + "(*(int (__thiscall **)(void *, int))(*(_DWORD *)lookup() + 8))(obj, nested());"
+    evidence = code_call_evidence(body, decompiled=True)
+    assert [s.target for s in evidence.sites if s.kind == "ordinary"] == ["lookup", "nested"]
+    assert evidence.count("unresolved") == 1
+    backend = _HexRaysBackend(has_asm=False, decompiled="int f() {" + body + "}")
+    result = verify_candidate("int f() { return lookup()->method(nested()); }", FunctionTarget("1", "", "f"), backend)
+    assert result.verdict == Verdict.UNKNOWN
+
+
+def test_pointer_cast_without_invocation_and_real_type_named_call() -> None:
+    body = "slot = (int (*)(void *))lookup(); _DWORD(x); factory(*ptr)(x);"
+    evidence = code_call_evidence(body, decompiled=True)
+    assert [s.target for s in evidence.sites if s.kind == "ordinary"] == ["lookup", "_DWORD", "factory"]
+    assert evidence.count("unresolved") == 0
+
+
+def test_local_pointer_identity_does_not_escape_its_scope() -> None:
+    code = "{ { int (*slot)(int); slot(x); } slot(x); obj._DWORD(*ptr)(x); }"
+    evidence = code_call_evidence(code, decompiled=True)
+    assert [s.target for s in evidence.sites if s.kind == "ordinary"] == ["slot", "_DWORD"]
+    assert [s.target for s in evidence.sites if s.kind == "unresolved"] == ["slot"]
