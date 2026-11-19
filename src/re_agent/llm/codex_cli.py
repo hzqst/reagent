@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from re_agent.llm.protocol import Message
+from re_agent.utils.evidence import escape_surrogates
 
 SANDBOX_MODE = "read-only"
 RUNNER_DOCUMENT_OVERRIDE = 'project_doc_fallback_filenames=["REAGENT_RUNNER.md"]'
@@ -180,7 +181,7 @@ class CodexCLIProvider:
                 [*args, "--output-last-message", str(out_path), "-"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                input=prompt,
+                input=escape_surrogates(prompt),
                 text=True,
                 encoding="utf-8",
                 timeout=self._timeout_s,

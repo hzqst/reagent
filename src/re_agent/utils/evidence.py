@@ -6,9 +6,14 @@ import json
 from typing import Any
 
 
+def escape_surrogates(content: str) -> str:
+    """Render lone surrogates as visible escapes for strict UTF-8 transports."""
+    return content.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
+
 def bounded_evidence(content: str, max_chars: int = 8000) -> str:
     # Backend strings may contain lone surrogates. Escape before measuring the prompt budget.
-    content = content.encode("utf-8", errors="backslashreplace").decode("utf-8")
+    content = escape_surrogates(content)
     if len(content) <= max_chars:
         return content
     try:
