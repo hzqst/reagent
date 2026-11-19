@@ -31,6 +31,7 @@ from re_agent.verification.inline_library import (
     unresolved_vector_flow,
     vector_regions,
 )
+from re_agent.verification.recovered_helpers import helper_sequences, mask_matched_sites, match_helpers
 from re_agent.verification.unrolling import (
     call_counter,
     callee_key,
@@ -58,7 +59,7 @@ def verify_candidate(
             findings=["Candidate code is empty"],
         )
 
-    raw_source_body = _extract_candidate_body(code, target)
+    raw_source_body, helpers = _candidate_functions(code, target)
     source_body = mask_non_code(raw_source_body)
     source_calls = code_call_evidence(source_body)
     source_call_count = source_calls.count("ordinary")
@@ -84,14 +85,15 @@ def verify_candidate(
         return credit
 
     def check_calls(evidence: CallEvidence, origin: str, message: str, *, lowering: int = 0,
-                    library_expansion: bool = False, uncertain_aliases: int = 0) -> None:
+                    library_expansion: bool = False, uncertain_aliases: int = 0,
+                    source_count: int = source_call_count) -> None:
         if evidence.count("pic") or evidence.count("decompiler_expr") or not evidence.comparable:
             call_notes.extend(evidence.diagnostics(origin))
         if not evidence.comparable:
             uncertainties.append(f"{origin} call comparison is inconclusive: {evidence.describe()}")
         # Direct retained calls provide a lower bound. Unknown/implicit calls
         # cannot increase the source's budget or hide an independent deficit.
-        deficit = evidence.count("ordinary") - uncertain_aliases - source_call_count
+        deficit = evidence.count("ordinary") - uncertain_aliases - source_count
         if evidence.complete and deficit >= call_count_tolerance and deficit > 0:
             unrolled = sum(unrolled_credit(evidence, origin).values())
             if unrolled and deficit - unrolled < call_count_tolerance:
@@ -250,7 +252,11 @@ def verify_candidate(
     body_start = masked_decompile.find(decompile_body)
     raw_body = decompile.decompiled[body_start:body_start + len(decompile_body)]
     decompile_calls = bind_indirect_sites(raw_body, decompile_calls, machine_calls)
-    decompile_unrolled = unrolled_call_credit(loops, source_callees, call_counter(decompile_calls))
+    recovered = match_helpers(helpers, source_body, source_calls, decompile_body, decompile_calls)
+    matched = set(recovered.decompiled)
+    remaining = CallEvidence(tuple(s for s in decompile_calls.sites if s not in matched),
+                             decompile_calls.raw_count - len(matched))
+    decompile_unrolled = unrolled_call_credit(loops, source_callees, call_counter(remaining))
     member_sites = Counter(
         site.target for site in source_calls.sites
         if site.kind == "ordinary" and source_body[:site.start].rstrip().endswith((".", "->"))
@@ -261,7 +267,7 @@ def verify_candidate(
     if new_members:
         source_names = Counter(site.target for site in source_calls.sites if site.kind == "ordinary")
         bare_names = Counter(
-            site.target for site in decompile_calls.sites if site.kind == "ordinary"
+            site.target for site in remaining.sites if site.kind == "ordinary"
             and re.fullmatch(r"\w+", site.target) and not decompile_body[:site.start].rstrip().endswith((".", "->"))
         )
         for name, occurrences in bare_names.items():
@@ -275,10 +281,15 @@ def verify_candidate(
 
     if "{" in decompile_body and decompile_calls.raw_count:
         checks_run += 1
-        check_calls(
-            decompile_calls, "Decompile",
+        message = (
             f"Decompiled call mismatch: decompiled body has {decompile_calls.count('ordinary')} ordinary call sites "
-            f"(raw lexical sites {decompile_calls.raw_count}), candidate has {source_call_count} calls",
+            f"(raw lexical sites {decompile_calls.raw_count}), candidate has {source_call_count} calls"
+        )
+        if recovered.extra_sites:
+            uncertainties.append(f"{message}; possible inline expansion of {recovered.describe()} "
+                                 f"accounts for {recovered.extra_sites} extra sites")
+        check_calls(
+            remaining, "Decompile", message, source_count=source_call_count - len(recovered.source),
             library_expansion=expanded,
             uncertain_aliases=min(possible_aliases.total(), new_members.total()),
         )
@@ -307,9 +318,10 @@ def verify_candidate(
                         "candidate writes no zero padding")
 
     if uncertainties or call_notes or new_members:
-        missing_calls = named_calls(mask_nonordinary_calls(decompile_body, evidence=decompile_calls)) - named_calls(
-            mask_nonordinary_calls(source_body), decompiled=False,
-        )
+        binary_text = mask_nonordinary_calls(decompile_body, evidence=decompile_calls)
+        source_text = mask_nonordinary_calls(source_body)
+        missing_calls = named_calls(mask_matched_sites(binary_text, recovered.decompiled)) - named_calls(
+            mask_matched_sites(source_text, recovered.source), decompiled=False)
         for name in list(missing_calls):
             # Exactly matched unrolled steps are not missing source calls.
             missing_calls[name] -= decompile_unrolled[callee_key(name)]
@@ -345,7 +357,7 @@ def verify_candidate(
     )
 
 
-def _extract_candidate_body(code: str, target: FunctionTarget | None = None) -> str:
+def _candidate_functions(code: str, target: FunctionTarget) -> tuple[str, dict[str, list[str]]]:
     """Return the target top-level function body, ignoring leading declarations.
 
     Unlike the decompiler output (which ``_extract_body`` handles), a candidate
@@ -361,10 +373,11 @@ def _extract_candidate_body(code: str, target: FunctionTarget | None = None) -> 
 
     definitions, _ = SourceIndexer._locate_function_definitions(code)
     if not definitions:
-        return code
+        return code, {}
     selected = _select_target_definition(code, definitions, target) if len(definitions) > 1 else None
     open_brace, close_brace = selected if selected is not None else definitions[0]
-    return code[open_brace : close_brace + 1]
+    helpers = helper_sequences(mask_non_code(code), definitions, selected) if selected else {}
+    return code[open_brace : close_brace + 1], helpers
 
 
 def _extract_body(text: str) -> str:
