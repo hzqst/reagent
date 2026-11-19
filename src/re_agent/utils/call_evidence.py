@@ -44,6 +44,17 @@ _ASM_CALL = re.compile(
 )
 _REGISTER = re.compile(r"(?:[re]?(?:ax|bx|cx|dx|si|di|bp|sp)|r\d+[bwd]?|[wx]\d+|lr)", re.IGNORECASE)
 _UNRESOLVED_NAME = re.compile(r"(?:sub_|FUN_|thunk_FUN_)[0-9a-fA-F]+")
+_POINTER_DECLARATOR = re.compile(
+    r"\s*(?P<abi>__(?:cdecl|stdcall|fastcall|thiscall|vectorcall|usercall|userpurge)\s*)?"
+    r"\*+\s*(?P<name>[A-Za-z_]\w*)?\s*\)\s*\("
+)
+_RETURN_TYPE = re.compile(r"void|bool|char|short|int|long|signed|unsigned|float|double|__int\d+|"
+                          r"_(?:BYTE|WORD|DWORD|QWORD|OWORD)|\w+_t")
+_CAST_GROUP = re.compile(r"\(\s*\**\s*\(\s*(?:(?:const|unsigned|signed|struct|class)\s+)*$")
+_GROUP_TOKEN = re.compile(r"[();]")
+_NEXT_ARGUMENTS = re.compile(r"\s*\(")
+_BRACE = re.compile(r"[{}]")
+_CALL_STATEMENT_PREFIX = re.compile(r"\s*\{?\s*(?:return\s+|[A-Za-z_]\w*\s*=\s*)?")
 
 
 @dataclass(frozen=True)
@@ -122,6 +133,36 @@ def classify_target(target: str, *, backend_symbol: bool = True) -> tuple[CallKi
     return "ordinary", "direct named call retained"
 
 
+def _cast_invocation(code: str, type_start: int) -> CallSite | None:
+    """Locate the argument list of a grouped cast callee, e.g. ((T (*)(int))slot)(x)."""
+    group = _CAST_GROUP.search(code, 0, type_start)
+    if group is None:
+        return None
+    depth = 0
+    for token in _GROUP_TOKEN.finditer(code, group.start()):
+        if token[0] == ";":
+            break
+        depth += 1 if token[0] == "(" else -1
+        if depth == 0:
+            arguments = _NEXT_ARGUMENTS.match(code, token.end())
+            if arguments:
+                offset = arguments.end() - 1
+                return CallSite(f"text offset {offset}", code[group.start():token.end()], "unresolved",
+                                "invocation through a function-pointer cast; target unverified",
+                                offset, offset + 1, indirect=True)
+            break
+    return None
+
+
+def _scope_end(code: str, offset: int) -> int:
+    depth = 0
+    for brace in _BRACE.finditer(code, offset):
+        if brace[0] == "}" and depth == 0:
+            return brace.start()
+        depth += 1 if brace[0] == "{" else -1
+    return len(code)
+
+
 def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
     """Read lexical occurrences; normalize known expressions only in decompiler text.
 
@@ -136,13 +177,27 @@ def code_call_evidence(code: str, *, decompiled: bool = False) -> CallEvidence:
         sites.append(CallSite(f"text offset {match.start()}", target, kind, reason, match.start(), match.end()))
     for site in sites:
         masked = masked[:site.start] + " " * (site.end - site.start) + masked[site.end:]
+    pointer_scopes: dict[str, int] = {}
     for match in call_tokens(masked):
         target = match[1]
         if target in CPP_KEYWORDS or target == "operator" or target.endswith("::operator"):
             continue
-        bare_decompiled = decompiled and not masked[:match.start()].rstrip().endswith((".", "->", "::"))
+        bare = not masked[:match.start()].rstrip().endswith((".", "->", "::"))
+        bare_decompiled = decompiled and bare
         kind, reason = classify_target(target, backend_symbol=bare_decompiled)
-        if bare_decompiled and is_decompiler_expression(target):
+        declarator = _POINTER_DECLARATOR.match(masked, match.end())
+        if bare and declarator and (declarator["abi"] or not declarator["name"] or _RETURN_TYPE.fullmatch(target)):
+            kind = "decompiler_expr"
+            reason = "function-pointer declarator or cast type"
+            if declarator["name"]:
+                name = declarator["name"]
+                pointer_scopes[name] = max(pointer_scopes.get(name, 0), _scope_end(masked, match.end()))
+            elif (invocation := _cast_invocation(masked, match.start())) is not None:
+                sites.append(invocation)
+        elif bare_decompiled and match.start() < pointer_scopes.get(target, 0):
+            kind = "unresolved"
+            reason = "call through a declared function pointer; target unverified"
+        elif bare_decompiled and is_decompiler_expression(target):
             kind = "decompiler_expr"
             reason = "known Hex-Rays access/coercion or x86 intrinsic expression, not a source-call requirement"
         sites.append(CallSite(f"text offset {match.start()}", target, kind, reason, match.start(), match.end()))
@@ -170,7 +225,7 @@ def bind_indirect_sites(code: str, evidence: CallEvidence, machine_calls: list[C
         if site.kind not in {"ordinary", "unresolved"}:
             continue
         line_start = code.rfind("\n", 0, site.start) + 1
-        if code[line_start:site.start].strip() not in {"", "{"}:
+        if not _CALL_STATEMENT_PREFIX.fullmatch(code[line_start:site.start]):
             continue
         end = code.find("\n", site.end)
         end = len(code) if end < 0 else end

@@ -77,6 +77,14 @@ def test_candidate_address_cannot_bind_backend_call() -> None:
     assert any("notify (1 occurrence(s))" in note for note in result.findings)
 
 
+@pytest.mark.parametrize("prefix", ["value = ", "return "])
+def test_single_call_in_return_or_assignment_can_bind_to_indirect_instruction(prefix: str) -> None:
+    backend = CallbackBackend(f"{prefix}table(obj); /*0xcd211*/", "cd211 call [edi+8Ch]")
+    result = verify_candidate("void f() { return obj->run(); }", TARGET, backend)
+    assert result.verdict == Verdict.UNKNOWN
+    assert any("table" in note and "0xcd211" in note and "unresolved" in note for note in result.findings)
+
+
 @pytest.mark.parametrize("body", ["outer(notify()); /*0xcd211*/", "notify(); /*0xcd212*/"])
 def test_ambiguous_or_unrelated_address_does_not_hide_direct_call(body: str) -> None:
     backend = CallbackBackend(body, "cd211 call [edi+8Ch]\ncd220 call notify")
@@ -105,3 +113,18 @@ def test_an_unrelated_qualified_symbol_does_not_confirm_a_bare_alias() -> None:
     result = verify_candidate("void f() { api.pfnInit(); Other::callback(); }", TARGET, backend)
     assert result.verdict == Verdict.UNKNOWN
     assert any("Unresolved call identity: callback" in note for note in result.findings)
+
+
+@pytest.mark.parametrize("keep_callback", [True, False])
+def test_speculative_direct_path_and_indirect_fallback(keep_callback: bool) -> None:
+    backend = CallbackBackend(
+        "int (__thiscall *slot)(Obj *);\n"
+        "callback();\nif (slot == Base::run) return Base::run(obj);\nreturn slot(obj);",
+        "101 call callback\n102 call Base::run\n103 call eax",
+    )
+    candidate = "void f() {" + ("callback();" if keep_callback else "") + "return obj->run();}"
+    result = verify_candidate(candidate, TARGET, backend)
+    assert result.verdict == (Verdict.UNKNOWN if keep_callback else Verdict.FAIL)
+    assert any("slot" in note and "unresolved" in note for note in result.findings)
+    if not keep_callback:
+        assert any("callback (1 occurrence(s))" in note for note in result.findings)
