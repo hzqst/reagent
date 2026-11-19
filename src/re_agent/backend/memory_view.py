@@ -24,8 +24,8 @@ DEFAULT_GLOBAL_BYTES = 256
 # A run of at least this many characters is reported as text.
 _MIN_TEXT_RUN = 4
 
-Decoded = tuple[str | None, int, int, bool]
-"""``(value, characters, bytes_per_char, terminator_observed)``."""
+Decoded = tuple[str, int, bool] | None
+"""``(value, byte_length, terminator_observed)`` for a plausible reading."""
 
 
 def describe_memory(data: bytes, *, preferred_size: int | None = None) -> dict[str, object]:
@@ -49,18 +49,18 @@ def describe_memory(data: bytes, *, preferred_size: int | None = None) -> dict[s
     # stops at the NUL while offering nothing.  Order only affects presentation;
     # every reading that succeeds is still reported.
     strings: dict[str, dict[str, object]] = {}
-    for label, decoder in (
-        ("utf32le", _decode_utf32le),
-        ("utf16le", _decode_utf16le),
-        ("ascii", _decode_ascii),
+    for label, decoded in (
+        ("utf32le", _decode_wide(data, "utf-32-le", 4)),
+        ("utf16le", _decode_wide(data, "utf-16-le", 2)),
+        ("ascii", _decode_ascii(data)),
     ):
-        value, characters, width, terminated = decoder(data)
-        if value is None:
+        if decoded is None:
             continue
+        value, byte_length, terminated = decoded
         strings[label] = {
             "value": value,
-            "characters": characters,
-            "byte_length": characters * width,
+            "characters": len(value),
+            "byte_length": byte_length,
             "terminator_observed": terminated,
         }
     out["strings"] = strings
@@ -86,46 +86,38 @@ def _decode_ascii(data: bytes) -> Decoded:
     run: list[str] = []
     for index, byte in enumerate(data):
         if byte == 0:
-            return _finish("".join(run), index, 1, True)
+            return _finish("".join(run), index, True)
         # Tabs/newlines are legal inside literals; anything else non-printable
         # means this is not the ASCII reading (the UTF-32LE bytes of "%" are
         # "0x25 0x00 0x00 0x00", so the NUL stops it immediately).
         if 0x20 <= byte < 0x7F or byte in (0x09, 0x0A, 0x0D):
             run.append(chr(byte))
         else:
-            return None, 0, 0, False
-    return _finish("".join(run), len(run), 1, False)
+            return None
+    return _finish("".join(run), len(run), False)
 
 
-def _decode_utf16le(data: bytes) -> Decoded:
-    units: list[str] = []
-    for offset in range(0, len(data) - 1, 2):
-        value = int.from_bytes(data[offset : offset + 2], "little")
-        if value == 0:
-            return _finish("".join(units), len(units), 2, True)
-        if value < 0x20 and value not in (0x09, 0x0A, 0x0D):
-            return None, 0, 0, False
-        units.append(chr(value))
-    return _finish("".join(units), len(units), 2, False)
+def _decode_wide(data: bytes, encoding: str, width: int) -> Decoded:
+    terminator = bytes(width)
+    end = len(data)
+    for offset in range(0, len(data), width):
+        if data.startswith(terminator, offset):
+            end = offset
+            break
+    try:
+        text = data[:end].decode(encoding)
+    except UnicodeDecodeError:
+        return None
+    if any(ord(ch) < 0x20 and ch not in "\t\n\r" for ch in text):
+        return None
+    return _finish(text, end, end < len(data))
 
 
-def _decode_utf32le(data: bytes) -> Decoded:
-    units: list[str] = []
-    for offset in range(0, len(data) - 3, 4):
-        value = int.from_bytes(data[offset : offset + 4], "little")
-        if value == 0:
-            return _finish("".join(units), len(units), 4, True)
-        if value > 0x10FFFF or (value < 0x20 and value not in (0x09, 0x0A, 0x0D)):
-            return None, 0, 0, False
-        units.append(chr(value))
-    return _finish("".join(units), len(units), 4, False)
-
-
-def _finish(text: str, characters: int, width: int, terminated: bool) -> Decoded:
+def _finish(text: str, byte_length: int, terminated: bool) -> Decoded:
     # A NUL unit seen inside the window is strong evidence for the wide
     # readings even for short literals ("%hs"); without one, demand a run long
     # enough that coincidence is unlikely.
     minimum = 2 if terminated else _MIN_TEXT_RUN
-    if characters < minimum:
-        return None, 0, 0, False
-    return text, characters, width, terminated
+    if len(text) < minimum:
+        return None
+    return text, byte_length, terminated

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from re_agent.agents.loop import run_fix_loop
@@ -54,8 +55,12 @@ def reverse_single(
     # reversal failure.
     file_roots = files.resolve_roots(config.reverser_tools.file_roots, base=Path(config.validation.project_root))
 
+    last_round = ReversalResult(target=target, code="")
+
     def gate(result: ReversalResult) -> ReversalResult:
-        return validate_result(result, config, backend, indexer)
+        nonlocal last_round
+        last_round = validate_result(result, config, backend, indexer)
+        return last_round
 
     try:
         result = run_fix_loop(
@@ -81,7 +86,7 @@ def reverse_single(
             max_llm_calls=config.orchestrator.max_llm_calls_per_function,
         )
     except (RuntimeError, OSError, ValueError) as exc:
-        result = ReversalResult(target=target, code="", success=False, error=str(exc))
+        result = replace(last_round, success=False, error=str(exc))
         logger.error("Reversal failed for %s: %s", target.address, exc)
 
     # Write generated code to a file so users don't have to dig through logs

@@ -65,6 +65,28 @@ def test_checker_protocol_error_is_reported_to_caller(tmp_path: Path, caplog: py
     assert "No symbol proposal" not in caplog.text
 
 
+def test_late_provider_failure_preserves_completed_round(tmp_path: Path) -> None:
+    config = ReAgentConfig.create_default()
+    config.project_profile.source_root = str(tmp_path / "source")
+    config.output.report_dir = str(tmp_path / "reports")
+    config.output.log_dir = str(tmp_path / "logs")
+    config.orchestrator.investigation_enabled = False
+    config.orchestrator.max_llm_calls_per_function = 2
+    code = "void CTest::Foo() {}"
+    result = reverse_single(
+        FunctionTarget("0x100", "CTest", "Foo"), config, StubBackend(),
+        _LLM(f"```cpp\n{code}\n```"),
+        checker_llm=_LLM("VERDICT: FAIL\nSUMMARY: Missing branch\nISSUES:\n- missing if"),
+    )
+    assert not result.success
+    assert "budget exhausted" in result.error
+    assert result.rounds_used == 1
+    assert result.code.strip() == code
+    assert result.checker_verdict.verdict == Verdict.FAIL
+    assert result.run_id
+    assert (tmp_path / "logs" / result.run_id / "round1-result.json").is_file()
+
+
 def test_candidate_parity_is_blocking_and_uses_generated_body(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()
