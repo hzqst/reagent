@@ -98,9 +98,7 @@ def _select_target_definition(
     for open_brace, close_brace in definitions:
         head_start = max(masked.rfind(";", 0, open_brace), masked.rfind("}", 0, open_brace))
         head = masked[head_start + 1 : open_brace]
-        if qualified in head or (
-            not target.class_name and re.search(rf"\b{re.escape(target.function_name)}\s*\(", head)
-        ):
+        if re.search(rf"(?<!\w){re.escape(qualified)}(?!\w)", head):
             matches.append((open_brace, close_brace))
     return matches[0] if len(matches) == 1 else None
 
