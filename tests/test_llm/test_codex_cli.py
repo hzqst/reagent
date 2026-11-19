@@ -10,6 +10,7 @@ import pytest
 
 from re_agent.config.schema import LLMConfig
 from re_agent.llm.codex_cli import CodexCLIProvider
+from re_agent.llm.observed import CallBudget, ObservedProvider
 from re_agent.llm.protocol import Message
 from re_agent.llm.registry import create_provider
 
@@ -40,6 +41,45 @@ def test_large_unicode_prompt_uses_utf8_stdin(tmp_path, monkeypatch):
     expected = "[USER]\n" + content.strip()
     assert CodexCLIProvider().send([Message(role="user", content=content)]) == expected
     assert all(not path.exists() for path in output_paths)
+
+
+def test_resumed_json_evidence_round_trips_through_utf8_stdin(tmp_path, monkeypatch):
+    payload = {"value": "\uda00Ø中文😀\udc00", "literal": r"\uda00"}
+    prompt = json.dumps(payload, ensure_ascii=False)
+    script = (
+        "import pathlib, sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "out = sys.argv[sys.argv.index('--output-last-message') + 1]\n"
+        "pathlib.Path(out).write_bytes(data)\n"
+        "print('{\"type\":\"thread.started\",\"thread_id\":\"t1\"}')\n"
+    )
+    run = subprocess.run
+
+    def invoke(args, **kwargs):
+        return run([sys.executable, "-c", script, *args[1:]], **kwargs)
+
+    monkeypatch.setattr("re_agent.llm.codex_cli.subprocess.run", invoke)
+    provider = ObservedProvider(CodexCLIProvider(), CallBudget(2), "reverser", tmp_path)
+    conversation = provider.new_conversation("system")
+    provider.resume(conversation, "first")
+    response = provider.resume(conversation, prompt)
+    assert "Ø中文😀" in response
+    assert json.loads(response) == payload
+    log = json.loads((tmp_path / "call-0002-reverser.json").read_text(encoding="utf-8"))
+    assert log["request"]["message"] == prompt
+
+
+def test_provider_failure_identifies_call_log(tmp_path):
+    provider = ObservedProvider(
+        CodexCLIProvider(codex_bin=str(tmp_path / "missing")), CallBudget(1), "reverser", tmp_path,
+    )
+    with pytest.raises(RuntimeError) as failure:
+        provider.send([Message(role="user", content="\uda00")])
+    log_path = tmp_path / "call-0001-reverser.json"
+    assert str(log_path) in str(failure.value)
+    log = json.loads(log_path.read_text(encoding="utf-8"))
+    assert "CLI not found" in log["error"]
+    assert log["request"]["messages"][0]["content"] == "\uda00"
 
 
 @pytest.mark.parametrize("failure", ["model", "timeout", "missing"])

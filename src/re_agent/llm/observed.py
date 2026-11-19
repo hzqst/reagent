@@ -49,6 +49,7 @@ class ObservedProvider:
 
     def _call(self, **request: Any) -> str:
         number = self.budget.consume()
+        log_path = self.log_dir / f"call-{number:04d}-{self.role}.json" if self.log_dir else None
         start = time.monotonic()
         event: dict[str, Any] = {"role": self.role, "call": number, "request": request}
         try:
@@ -60,17 +61,22 @@ class ObservedProvider:
             return response
         except Exception as exc:
             event["error"] = str(exc)
+            if isinstance(exc, (RuntimeError, OSError, ValueError)):
+                context = f"{self.role} call {number}"
+                if log_path:
+                    context += f" ({log_path})"
+                raise RuntimeError(f"{context}: {exc}") from exc
             raise
         finally:
             event["duration_s"] = time.monotonic() - start
             event["metadata"] = self.last_metadata
-            if self.log_dir:
+            if log_path:
 
                 def encode(value: Any) -> Any:
                     if is_dataclass(value) and not isinstance(value, type):
                         return asdict(value)
                     return str(value)
 
-                (self.log_dir / f"call-{number:04d}-{self.role}.json").write_text(
+                log_path.write_text(
                     json.dumps(event, default=encode, indent=2), encoding="utf-8"
                 )
